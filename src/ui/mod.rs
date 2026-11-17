@@ -2,6 +2,7 @@
 
 mod markdown_editor;
 mod new_pull_request;
+mod pull_request_detail;
 mod pull_request_list;
 mod welcome;
 
@@ -9,8 +10,10 @@ use crate::db::{ProjectStore, PullRequest, PullRequestStatus, SavedProject};
 use crate::repository::Repository;
 use markdown_editor::MarkdownDraft;
 use new_pull_request::NewPullRequestForm;
-use rune::{App, AppSpec, Cx, El, col, row, text};
+use pull_request_detail::PullRequestDetail;
+use rune::{App, AppSpec, Cx, El, KeyEvent, Tx, col, row, text};
 use rune_kit::Kit;
+use rune_kit::diff::{DiffMode, DiffState};
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,6 +21,7 @@ pub enum Screen {
     Welcome,
     PullRequestList,
     NewPullRequest,
+    PullRequestDetail,
 }
 
 pub struct Dialectic {
@@ -31,9 +35,14 @@ pub struct Dialectic {
     pub new_pull_request_form: NewPullRequestForm,
     /// The title and description being written: a new pull request's, or an open one's while editing.
     pub draft: MarkdownDraft,
+    pub pull_request_detail: Option<PullRequestDetail>,
+    /// The shown pull request's diff; kept outside `pull_request_detail` because `DiffView` borrows it by accessor.
+    pub pull_request_diff: DiffState,
     /// The last failure, shown on the current screen until the next action.
     pub error_message: Option<String>,
 }
+
+const DIFF_MODE_SETTING: &str = "diff_mode";
 
 impl Dialectic {
     /// Opens the repository named by the first argument Rune doesn't use itself, else the welcome screen.
@@ -54,6 +63,8 @@ impl Dialectic {
             pull_requests: Vec::new(),
             new_pull_request_form: NewPullRequestForm::default(),
             draft: MarkdownDraft::default(),
+            pull_request_detail: None,
+            pull_request_diff: DiffState::new(Vec::new()),
             error_message: None,
         };
         match ProjectStore::open_in_app_data_dir() {
@@ -137,8 +148,47 @@ impl Dialectic {
             source_branch,
             target_branch,
         ) {
-            Ok(_) => self.show_pull_request_list(),
+            Ok(pull_request_id) => self.show_pull_request(pull_request_id),
             Err(error) => self.error_message = Some(error.to_string()),
+        }
+    }
+
+    /// Loads the pull request with its commits and diff, opening on the Overview tab.
+    pub fn show_pull_request(&mut self, pull_request_id: i64) {
+        self.error_message = None;
+        if let Err(error) = self.load_pull_request(pull_request_id, pull_request_detail::OVERVIEW_TAB) {
+            self.error_message = Some(error.to_string());
+            return;
+        }
+        self.screen = Screen::PullRequestDetail;
+    }
+
+    fn load_pull_request(&mut self, pull_request_id: i64, selected_tab: usize) -> crate::Result<()> {
+        let Some(repository) = &self.repository else { return Ok(()) };
+        let pull_request = repository.pull_request(pull_request_id)?;
+        let commits = repository.commits(&pull_request)?;
+        self.pull_request_diff =
+            pull_request_detail::diff_state(&repository.diff(&pull_request)?, self.saved_diff_mode());
+        self.pull_request_detail = Some(PullRequestDetail { pull_request, commits, selected_tab });
+        Ok(())
+    }
+
+    fn saved_diff_mode(&self) -> DiffMode {
+        let saved_mode = self
+            .project_store
+            .as_ref()
+            .and_then(|project_store| project_store.setting(DIFF_MODE_SETTING).ok().flatten());
+        if saved_mode.as_deref() == Some("split") { DiffMode::Split } else { DiffMode::Unified }
+    }
+
+    /// Switches the diff layout and remembers it for next time.
+    pub fn set_diff_mode(&mut self, diff_mode: DiffMode) {
+        self.pull_request_diff.set_mode(diff_mode);
+        let mode_name = if diff_mode == DiffMode::Split { "split" } else { "unified" };
+        if let Some(project_store) = &self.project_store
+            && let Err(error) = project_store.set_setting(DIFF_MODE_SETTING, mode_name)
+        {
+            self.error_message = Some(error.to_string());
         }
     }
 
@@ -165,6 +215,10 @@ fn view(app: &Dialectic, cx: &mut Cx<Dialectic>) -> El {
         Screen::Welcome => welcome::view(app, &k),
         Screen::PullRequestList => pull_request_list::view(app, &k),
         Screen::NewPullRequest => new_pull_request::view(app, &k, &mut overlay_layer),
+        Screen::PullRequestDetail => match &app.pull_request_detail {
+            Some(detail) => pull_request_detail::view(app, detail, &k),
+            None => pull_request_list::view(app, &k),
+        },
     };
     rune_kit::root(col().w_full().h_full().fill(k.c.bg_base).child(screen), overlay_layer)
 }
@@ -312,7 +366,36 @@ greet('Ada', punctuation='?')  # Hello, Ada?
 ";
 
 /// Headless stills of each screen: `dialectic <repo> --snap out.png --scene <name>` (see `make screenshots`).
-const SCENES: &[(&str, fn(&mut Dialectic))] = &[
+type Scene = (&'static str, fn(&mut Dialectic));
+
+/// Shows the newest open pull request (else the newest) on `tab`; scenes run against a repository that has some.
+fn show_newest_pull_request(app: &mut Dialectic, tab: usize) {
+    app.show_pull_request_list();
+    let newest = app
+        .pull_requests
+        .iter()
+        .find(|pull_request| pull_request.status == PullRequestStatus::Open)
+        .or(app.pull_requests.first());
+    if let Some(pull_request_id) = newest.map(|pull_request| pull_request.id) {
+        app.show_pull_request(pull_request_id);
+        if let Some(detail) = &mut app.pull_request_detail {
+            detail.selected_tab = tab;
+        }
+    }
+}
+
+const SCENES: &[Scene] = &[
+    ("pull-request-list", Dialectic::show_pull_request_list),
+    ("pull-request-overview", |app| show_newest_pull_request(app, pull_request_detail::OVERVIEW_TAB)),
+    ("pull-request-commits", |app| show_newest_pull_request(app, pull_request_detail::COMMITS_TAB)),
+    ("pull-request-files", |app| {
+        show_newest_pull_request(app, pull_request_detail::FILES_CHANGED_TAB);
+        app.pull_request_diff.set_mode(DiffMode::Unified);
+    }),
+    ("pull-request-files-split", |app| {
+        show_newest_pull_request(app, pull_request_detail::FILES_CHANGED_TAB);
+        app.pull_request_diff.set_mode(DiffMode::Split);
+    }),
     ("new-pull-request", |app| {
         app.show_new_pull_request();
         app.draft = MarkdownDraft::with_text("Add punctuation to greetings", SAMPLE_DESCRIPTION);
@@ -324,8 +407,22 @@ const SCENES: &[(&str, fn(&mut Dialectic))] = &[
     }),
 ];
 
+/// The diff's own keys while it shows: j/k between hunks, ]/[ between files.
+fn on_key(app: &mut Dialectic, key_event: &KeyEvent, tx: &mut Tx) -> bool {
+    let showing_files = app.screen == Screen::PullRequestDetail
+        && app
+            .pull_request_detail
+            .as_ref()
+            .is_some_and(|detail| detail.selected_tab == pull_request_detail::FILES_CHANGED_TAB);
+    showing_files && app.pull_request_diff.key(key_event, tx)
+}
+
 pub fn run() {
-    let spec =
-        AppSpec { scenes: SCENES, ..AppSpec::new("Dialectic", (1100.0, 760.0), Dialectic::from_command_line, view) };
+    let spec = AppSpec {
+        scenes: SCENES,
+        on_key: Some(on_key),
+        families: ("Inter", "ui-monospace, Menlo, Inter"),
+        ..AppSpec::new("Dialectic", (1100.0, 760.0), Dialectic::from_command_line, view)
+    };
     App::new(spec).modifier_keys().run();
 }

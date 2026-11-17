@@ -81,6 +81,7 @@ fn pull_request_row(pull_request: &PullRequest, k: &Kit) -> El {
         .items_center()
         .border_sides([1.0, 0.0, 0.0, 0.0], k.c.border_weak)
         .hover(k.c.hover)
+        .on_press(move |app: &mut Dialectic| app.show_pull_request(pull_request_id))
         .child(status_badge(pull_request.status, k))
         .child(
             col()

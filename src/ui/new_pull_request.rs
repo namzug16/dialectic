@@ -17,21 +17,13 @@ pub fn view(app: &Dialectic, k: &Kit, overlay_layer: &mut Vec<El>) -> El {
     let form = &app.new_pull_request_form;
     let branch_picker = |picker_key: &'static str, current_branch: &Option<String>, overlay_layer: &mut Vec<El>| {
         Select::new(picker_key, &form.local_branches)
-            .label(if picker_key == "source-branch" {
-                "Source branch"
-            } else {
-                "Target branch"
-            })
+            .label(if picker_key == "source-branch" { "Source branch" } else { "Target branch" })
             .placeholder("Choose a branch")
             .current(current_branch.as_deref())
             .open(form.open_branch_picker == Some(picker_key))
             .on_toggle(move |app: &mut Dialectic| {
                 let picker = &mut app.new_pull_request_form.open_branch_picker;
-                *picker = if *picker == Some(picker_key) {
-                    None
-                } else {
-                    Some(picker_key)
-                };
+                *picker = if *picker == Some(picker_key) { None } else { Some(picker_key) };
             })
             .on_close(|app: &mut Dialectic| app.new_pull_request_form.open_branch_picker = None)
             .on_choose(move |app: &mut Dialectic, chosen_branch: &str, _: &mut Tx| {
@@ -81,11 +73,7 @@ pub fn view(app: &Dialectic, k: &Kit, overlay_layer: &mut Vec<El>) -> El {
     let mut content = col()
         .w_full()
         .gap(16.0)
-        .child(
-            text("Open a pull request")
-                .font(k.ty.body_medium)
-                .color(k.c.text_strong),
-        )
+        .child(text("Open a pull request").font(k.ty.body_medium).color(k.c.text_strong))
         .child(
             text("Pick the branch with the changes and the branch they should merge into.")
                 .font(k.ty.ui)
@@ -95,9 +83,5 @@ pub fn view(app: &Dialectic, k: &Kit, overlay_layer: &mut Vec<El>) -> El {
     if let Some(banner) = error_banner(app, k) {
         content = content.child(banner);
     }
-    page(
-        app,
-        k,
-        content.child(markdown_editor::view(&app.draft, k)).child(actions),
-    )
+    page(app, k, content.child(markdown_editor::view(&app.draft, k)).child(actions))
 }

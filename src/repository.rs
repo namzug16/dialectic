@@ -15,11 +15,7 @@ impl Repository {
     pub fn open(any_path_inside: &Path) -> Result<Self> {
         let location = git::locate_repository(any_path_inside)?;
         let pull_requests = PullRequestStore::open_in_git_dir(&location.git_common_dir)?;
-        Ok(Self {
-            top_level_path: location.top_level_path,
-            git_common_dir: location.git_common_dir,
-            pull_requests,
-        })
+        Ok(Self { top_level_path: location.top_level_path, git_common_dir: location.git_common_dir, pull_requests })
     }
 
     pub fn name(&self) -> String {
@@ -49,9 +45,7 @@ impl Repository {
             return Err(Error("a pull request needs a title".into()));
         }
         if source_branch == target_branch {
-            return Err(Error(format!(
-                "source and target are both '{source_branch}'; pick two different branches"
-            )));
+            return Err(Error(format!("source and target are both '{source_branch}'; pick two different branches")));
         }
         let branches = self.local_branches()?;
         for branch in [source_branch, target_branch] {
@@ -92,8 +86,7 @@ impl Repository {
         if title.is_empty() {
             return Err(Error("a pull request needs a title".into()));
         }
-        self.pull_requests
-            .update_title_and_description(pull_request.id, title, description)
+        self.pull_requests.update_title_and_description(pull_request.id, title, description)
     }
 
     /// The (base, head) revisions a pull request compares: live branches while open, frozen commits after.
@@ -144,19 +137,11 @@ impl Repository {
                 let temporary_worktree_text = temporary_worktree.to_string_lossy().into_owned();
                 git::run_git(
                     &self.top_level_path,
-                    &[
-                        "worktree",
-                        "add",
-                        "--quiet",
-                        &temporary_worktree_text,
-                        &pull_request.target_branch,
-                    ],
+                    &["worktree", "add", "--quiet", &temporary_worktree_text, &pull_request.target_branch],
                 )?;
                 let merge_result = merge_in_worktree(&temporary_worktree, &pull_request.source_branch);
-                let removal_result = git::run_git(
-                    &self.top_level_path,
-                    &["worktree", "remove", "--force", &temporary_worktree_text],
-                );
+                let removal_result =
+                    git::run_git(&self.top_level_path, &["worktree", "remove", "--force", &temporary_worktree_text]);
                 let merge_outcome = merge_result?;
                 removal_result?;
                 merge_outcome
@@ -178,17 +163,13 @@ impl Repository {
         let pull_request = self.open_pull_request(pull_request_id)?;
         let target_sha = git::resolve_commit_sha(&self.top_level_path, &pull_request.target_branch)?;
         let source_sha = git::resolve_commit_sha(&self.top_level_path, &pull_request.source_branch)?;
-        self.pull_requests
-            .finish(pull_request_id, PullRequestStatus::Closed, &target_sha, &source_sha)
+        self.pull_requests.finish(pull_request_id, PullRequestStatus::Closed, &target_sha, &source_sha)
     }
 
     fn open_pull_request(&self, pull_request_id: i64) -> Result<PullRequest> {
         let pull_request = self.pull_requests.get(pull_request_id)?;
         if pull_request.status != PullRequestStatus::Open {
-            return Err(Error(format!(
-                "pull request #{pull_request_id} is {}",
-                pull_request.status.as_str()
-            )));
+            return Err(Error(format!("pull request #{pull_request_id} is {}", pull_request.status.as_str())));
         }
         Ok(pull_request)
     }

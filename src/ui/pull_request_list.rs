@@ -6,22 +6,14 @@ use rune::{El, col, row, text};
 use rune_kit::{Button, ButtonVariant, Kit};
 
 pub fn view(app: &Dialectic, k: &Kit) -> El {
-    let open_count = app
-        .pull_requests
-        .iter()
-        .filter(|pull_request| pull_request.status == PullRequestStatus::Open)
-        .count();
+    let open_count =
+        app.pull_requests.iter().filter(|pull_request| pull_request.status == PullRequestStatus::Open).count();
     let finished_count = app.pull_requests.len() - open_count;
 
     let title_row = row()
         .w_full()
         .items_center()
-        .child(
-            text("Pull requests")
-                .font(k.ty.body_medium)
-                .color(k.c.text_strong)
-                .grow(1.0),
-        )
+        .child(text("Pull requests").font(k.ty.body_medium).color(k.c.text_strong).grow(1.0))
         .child(
             Button::new("New pull request")
                 .variant(ButtonVariant::Submit)
@@ -42,16 +34,8 @@ pub fn view(app: &Dialectic, k: &Kit) -> El {
                 .py(12.0)
                 .gap(16.0)
                 .fill(k.c.layer_01)
-                .child(
-                    text(format!("{open_count} Open"))
-                        .font(k.ty.ui_medium)
-                        .color(k.c.text_base),
-                )
-                .child(
-                    text(format!("{finished_count} Merged or closed"))
-                        .font(k.ty.ui)
-                        .color(k.c.text_muted),
-                ),
+                .child(text(format!("{open_count} Open")).font(k.ty.ui_medium).color(k.c.text_base))
+                .child(text(format!("{finished_count} Merged or closed")).font(k.ty.ui).color(k.c.text_muted)),
         );
     if app.pull_requests.is_empty() {
         table = table.child(
@@ -102,20 +86,12 @@ fn pull_request_row(pull_request: &PullRequest, k: &Kit) -> El {
             col()
                 .grow(1.0)
                 .gap(4.0)
-                .child(
-                    text(pull_request.title.clone())
-                        .font(k.ty.body_medium)
-                        .color(k.c.text_strong),
-                )
+                .child(text(pull_request.title.clone()).font(k.ty.body_medium).color(k.c.text_strong))
                 .child(
                     text(format!("#{pull_request_id} {activity} UTC by {}", pull_request.author))
                         .font(k.ty.caption())
                         .color(k.c.text_muted),
                 ),
         )
-        .child(super::branch_flow(
-            &pull_request.source_branch,
-            &pull_request.target_branch,
-            k,
-        ))
+        .child(super::branch_flow(&pull_request.source_branch, &pull_request.target_branch, k))
 }

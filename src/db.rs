@@ -28,9 +28,7 @@ impl PullRequestStatus {
             "open" => Ok(PullRequestStatus::Open),
             "merged" => Ok(PullRequestStatus::Merged),
             "closed" => Ok(PullRequestStatus::Closed),
-            other => Err(Error(format!(
-                "unknown pull request status '{other}' (expected open, merged or closed)"
-            ))),
+            other => Err(Error(format!("unknown pull request status '{other}' (expected open, merged or closed)"))),
         }
     }
 }
@@ -118,9 +116,9 @@ impl PullRequestStore {
 
     /// Open pull requests first, then newest first.
     pub fn list(&self) -> Result<Vec<PullRequest>> {
-        let mut statement = self.connection.prepare(&format!(
-            "SELECT {PULL_REQUEST_COLUMNS} FROM pull_requests ORDER BY status != 'open', id DESC"
-        ))?;
+        let mut statement = self
+            .connection
+            .prepare(&format!("SELECT {PULL_REQUEST_COLUMNS} FROM pull_requests ORDER BY status != 'open', id DESC"))?;
         let rows = statement.query_map([], read_pull_request_row)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -167,12 +165,7 @@ impl PullRequestStore {
             "UPDATE pull_requests
              SET status = ?2, merged_or_closed_at = datetime('now'), frozen_target_sha = ?3, frozen_source_sha = ?4
              WHERE id = ?1 AND status = 'open'",
-            params![
-                pull_request_id,
-                final_status.as_str(),
-                frozen_target_sha,
-                frozen_source_sha
-            ],
+            params![pull_request_id, final_status.as_str(), frozen_target_sha, frozen_source_sha],
         )?;
         if changed_rows == 0 {
             return Err(Error(format!("pull request #{pull_request_id} is not open")));
@@ -251,20 +244,15 @@ impl ProjectStore {
             .connection
             .prepare("SELECT repository_path, last_opened_at FROM projects ORDER BY last_opened_at DESC")?;
         let rows = statement.query_map([], |row| {
-            Ok(SavedProject {
-                repository_path: PathBuf::from(row.get::<_, String>(0)?),
-                last_opened_at: row.get(1)?,
-            })
+            Ok(SavedProject { repository_path: PathBuf::from(row.get::<_, String>(0)?), last_opened_at: row.get(1)? })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// Forgets the project; the repository and its pull requests are untouched.
     pub fn remove(&self, repository_path: &Path) -> Result<()> {
-        self.connection.execute(
-            "DELETE FROM projects WHERE repository_path = ?1",
-            [repository_path.to_string_lossy()],
-        )?;
+        self.connection
+            .execute("DELETE FROM projects WHERE repository_path = ?1", [repository_path.to_string_lossy()])?;
         Ok(())
     }
 
@@ -306,26 +294,16 @@ mod tests {
         let second_id = store.create(&new_pull_request("other")).unwrap();
 
         assert_eq!(store.find_open_between("feature", "main").unwrap(), Some(first_id));
-        store
-            .update_title_and_description(first_id, "Add login v2", "done")
-            .unwrap();
+        store.update_title_and_description(first_id, "Add login v2", "done").unwrap();
         store.finish(first_id, PullRequestStatus::Merged, "aaa", "bbb").unwrap();
         assert!(store.finish(first_id, PullRequestStatus::Closed, "x", "y").is_err());
 
         let merged = store.get(first_id).unwrap();
-        assert_eq!(
-            (merged.title.as_str(), merged.status),
-            ("Add login v2", PullRequestStatus::Merged)
-        );
+        assert_eq!((merged.title.as_str(), merged.status), ("Add login v2", PullRequestStatus::Merged));
         assert_eq!(merged.frozen_source_sha.as_deref(), Some("bbb"));
         assert_eq!(store.find_open_between("feature", "main").unwrap(), None);
 
-        let listed_ids: Vec<i64> = store
-            .list()
-            .unwrap()
-            .iter()
-            .map(|pull_request| pull_request.id)
-            .collect();
+        let listed_ids: Vec<i64> = store.list().unwrap().iter().map(|pull_request| pull_request.id).collect();
         assert_eq!(listed_ids, vec![second_id, first_id], "open pull requests list first");
         assert!(store.get(99).is_err());
     }
@@ -337,12 +315,8 @@ mod tests {
         store.record_opened(Path::new("/repos/a")).unwrap();
         store.record_opened(Path::new("/repos/b")).unwrap();
         store.record_opened(Path::new("/repos/a")).unwrap();
-        let saved_paths: Vec<PathBuf> = store
-            .list_most_recent_first()
-            .unwrap()
-            .into_iter()
-            .map(|project| project.repository_path)
-            .collect();
+        let saved_paths: Vec<PathBuf> =
+            store.list_most_recent_first().unwrap().into_iter().map(|project| project.repository_path).collect();
         assert_eq!(saved_paths, vec![PathBuf::from("/repos/a"), PathBuf::from("/repos/b")]);
         store.remove(Path::new("/repos/b")).unwrap();
         assert_eq!(store.list_most_recent_first().unwrap().len(), 1);

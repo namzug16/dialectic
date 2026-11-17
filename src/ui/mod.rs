@@ -111,9 +111,8 @@ impl Dialectic {
         let target_branch = ["main", "master"]
             .into_iter()
             .find(|default_branch| local_branches.iter().any(|branch| branch == default_branch));
-        let source_branch = repository
-            .current_branch()
-            .filter(|current_branch| Some(current_branch.as_str()) != target_branch);
+        let source_branch =
+            repository.current_branch().filter(|current_branch| Some(current_branch.as_str()) != target_branch);
         self.new_pull_request_form = NewPullRequestForm {
             source_branch,
             target_branch: target_branch.map(str::to_owned),
@@ -207,13 +206,7 @@ pub fn page(app: &Dialectic, k: &Kit, content: El) -> El {
             .w_full()
             .grow(1.0)
             .scroll(rune::ScrollSpec { stick_bottom: false })
-            .child(
-                row()
-                    .w_full()
-                    .justify_center()
-                    .padding(24.0)
-                    .child(col().w_full().max_w(1012.0).child(content)),
-            ),
+            .child(row().w_full().justify_center().padding(24.0).child(col().w_full().max_w(1012.0).child(content))),
     )
 }
 
@@ -262,11 +255,8 @@ pub fn tab_strip(
     let mut strip = row().key(key_prefix.to_owned()).gap(4.0);
     for (tab_index, tab_label) in tab_labels.iter().enumerate() {
         let is_selected = tab_index == selected_tab;
-        let underline = if is_selected {
-            rune::color::hex("#fd8c73").unwrap_or(k.c.text_accent)
-        } else {
-            k.c.bg_base.alpha(0.0)
-        };
+        let underline =
+            if is_selected { rune::color::hex("#fd8c73").unwrap_or(k.c.text_accent) } else { k.c.bg_base.alpha(0.0) };
         strip = strip.child(
             col()
                 .key(format!("{key_prefix}-{tab_index}"))
@@ -335,9 +325,7 @@ const SCENES: &[(&str, fn(&mut Dialectic))] = &[
 ];
 
 pub fn run() {
-    let spec = AppSpec {
-        scenes: SCENES,
-        ..AppSpec::new("Dialectic", (1100.0, 760.0), Dialectic::from_command_line, view)
-    };
+    let spec =
+        AppSpec { scenes: SCENES, ..AppSpec::new("Dialectic", (1100.0, 760.0), Dialectic::from_command_line, view) };
     App::new(spec).modifier_keys().run();
 }

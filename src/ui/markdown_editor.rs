@@ -15,11 +15,7 @@ pub struct MarkdownDraft {
 
 impl MarkdownDraft {
     pub fn with_text(title: &str, description: &str) -> MarkdownDraft {
-        MarkdownDraft {
-            title: TextEdit::new(title),
-            description: TextEdit::new(description),
-            showing_preview: false,
-        }
+        MarkdownDraft { title: TextEdit::new(title), description: TextEdit::new(description), showing_preview: false }
     }
 }
 
@@ -45,12 +41,7 @@ pub fn view(draft: &MarkdownDraft, k: &Kit) -> El {
         } else {
             rendered_markdown(&draft.description.text, k)
         };
-        col()
-            .key("description-preview")
-            .w_full()
-            .min_h(240.0)
-            .padding(12.0)
-            .child(preview)
+        col().key("description-preview").w_full().min_h(240.0).padding(12.0).child(preview)
     } else {
         col().w_full().padding(8.0).child(
             TextArea::new(&draft.description)

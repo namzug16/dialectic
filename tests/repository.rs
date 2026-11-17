@@ -187,3 +187,18 @@ fn rebasing_into_a_target_nobody_has_checked_out_moves_only_the_branch() {
     assert_eq!(common::git(temporary_dir.path(), &["branch", "--show-current"]).trim(), "conflict");
     assert!(common::git(temporary_dir.path(), &["status", "--porcelain"]).is_empty());
 }
+
+#[test]
+fn conflicts_are_predicted_before_merging_without_touching_the_checkout() {
+    let (temporary_dir, repository) = open_demo_repository();
+    let clean_id = repository.create_pull_request("Add greeting", "", "feature", "main").unwrap();
+    let conflicting_id = repository.create_pull_request("Change one", "", "conflict", "main").unwrap();
+    let main_before = common::git(temporary_dir.path(), &["rev-parse", "main"]);
+
+    assert!(repository.merge_conflicts(&repository.pull_request(clean_id).unwrap()).unwrap().is_empty());
+    let conflicting = repository.pull_request(conflicting_id).unwrap();
+    assert_eq!(repository.merge_conflicts(&conflicting).unwrap(), vec!["app.txt".to_owned()]);
+
+    assert_eq!(common::git(temporary_dir.path(), &["rev-parse", "main"]), main_before);
+    assert!(common::git(temporary_dir.path(), &["status", "--porcelain"]).is_empty());
+}

@@ -5,19 +5,33 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub fn run_git(working_dir: &Path, arguments: &[&str]) -> Result<String> {
+    run_git_accepting_exit_codes(working_dir, arguments, &[0]).map(|(_, stdout)| stdout)
+}
+
+/// For commands whose exit code carries an answer (`git merge-tree` exits 1 on conflicts, `git diff
+/// --no-index` on differences): `Ok` with the code and stdout when the code is one of `accepted_exit_codes`.
+fn run_git_accepting_exit_codes(
+    working_dir: &Path,
+    arguments: &[&str],
+    accepted_exit_codes: &[i32],
+) -> Result<(i32, String)> {
     let output = Command::new("git")
         .arg("-C")
         .arg(working_dir)
         .args(arguments)
         .output()
         .map_err(|error| Error(format!("could not run git (is it installed and on PATH?): {error}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let message = if stderr.trim().is_empty() { stdout.trim() } else { stderr.trim() };
-        return Err(Error(format!("git {} failed: {message}", arguments.join(" "))));
+    match output.status.code() {
+        Some(exit_code) if accepted_exit_codes.contains(&exit_code) => {
+            Ok((exit_code, String::from_utf8_lossy(&output.stdout).into_owned()))
+        }
+        _ => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let message = if stderr.trim().is_empty() { stdout.trim() } else { stderr.trim() };
+            Err(Error(format!("git {} failed: {message}", arguments.join(" "))))
+        }
     }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 pub struct RepositoryLocation {
@@ -152,4 +166,19 @@ pub fn has_uncommitted_changes(working_dir: &Path) -> Result<bool> {
 pub fn conflicted_files(working_dir: &Path) -> Result<Vec<String>> {
     let output = run_git(working_dir, &["diff", "--name-only", "--diff-filter=U"])?;
     Ok(output.lines().map(str::to_owned).collect())
+}
+
+/// The files that would conflict if `source` were merged into `target`, found without touching any
+/// checkout (`git merge-tree`, git 2.38+). Empty when they merge cleanly.
+pub fn predicted_merge_conflicts(working_dir: &Path, target: &str, source: &str) -> Result<Vec<String>> {
+    let (exit_code, output) = run_git_accepting_exit_codes(
+        working_dir,
+        &["merge-tree", "--write-tree", "--name-only", "--no-messages", target, source],
+        &[0, 1],
+    )?;
+    if exit_code == 0 {
+        return Ok(Vec::new());
+    }
+    // The first line is the merged tree's id; the conflicted paths follow, up to a blank line.
+    Ok(output.lines().skip(1).take_while(|line| !line.is_empty()).map(str::to_owned).collect())
 }

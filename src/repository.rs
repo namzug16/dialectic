@@ -114,6 +114,15 @@ impl Repository {
         git::changed_files_since_merge_base(&self.top_level_path, &base, &head)
     }
 
+    /// The files that conflict between an open pull request's branches, so the app can block the merge
+    /// before anyone tries it. Always empty for merged or closed pull requests.
+    pub fn merge_conflicts(&self, pull_request: &PullRequest) -> Result<Vec<String>> {
+        if pull_request.status != PullRequestStatus::Open {
+            return Ok(Vec::new());
+        }
+        git::predicted_merge_conflicts(&self.top_level_path, &pull_request.target_branch, &pull_request.source_branch)
+    }
+
     /// Merges the source branch into the target branch with git:
     /// - `MergeCommit` runs a standard `git merge --no-ff`.
     /// - `Rebase` replays the source's commits onto the target in a temporary detached worktree (the source

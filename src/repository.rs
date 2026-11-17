@@ -115,6 +115,73 @@ impl Repository {
         git::diff_since_merge_base(&self.top_level_path, &base, &head)
     }
 
+    /// Runs a standard `git merge --no-ff` of the source branch into the target branch. It merges in the
+    /// worktree that has the target checked out (refusing if it has uncommitted changes), or else in a
+    /// temporary worktree. On conflicts the merge is aborted, leaving the target as it was.
+    pub fn merge_pull_request(&self, pull_request_id: i64) -> Result<MergeOutcome> {
+        let pull_request = self.open_pull_request(pull_request_id)?;
+        let target_sha_before_merge = git::resolve_commit_sha(&self.top_level_path, &pull_request.target_branch)?;
+        let source_sha = git::resolve_commit_sha(&self.top_level_path, &pull_request.source_branch)?;
+
+        let worktree_with_target = git::worktrees(&self.top_level_path)?
+            .into_iter()
+            .find(|(_, checked_out_branch)| checked_out_branch.as_deref() == Some(pull_request.target_branch.as_str()))
+            .map(|(worktree_path, _)| worktree_path);
+        let merge_outcome = match worktree_with_target {
+            Some(worktree_path) => {
+                if git::has_uncommitted_changes(&worktree_path)? {
+                    return Err(Error(format!(
+                        "'{}' is checked out in {} with uncommitted changes; commit or stash them, then merge again",
+                        pull_request.target_branch,
+                        worktree_path.display()
+                    )));
+                }
+                merge_in_worktree(&worktree_path, &pull_request.source_branch)?
+            }
+            None => {
+                let temporary_worktree =
+                    std::env::temp_dir().join(format!("dialectic-merge-{}-{pull_request_id}", std::process::id()));
+                let temporary_worktree_text = temporary_worktree.to_string_lossy().into_owned();
+                git::run_git(
+                    &self.top_level_path,
+                    &[
+                        "worktree",
+                        "add",
+                        "--quiet",
+                        &temporary_worktree_text,
+                        &pull_request.target_branch,
+                    ],
+                )?;
+                let merge_result = merge_in_worktree(&temporary_worktree, &pull_request.source_branch);
+                let removal_result = git::run_git(
+                    &self.top_level_path,
+                    &["worktree", "remove", "--force", &temporary_worktree_text],
+                );
+                let merge_outcome = merge_result?;
+                removal_result?;
+                merge_outcome
+            }
+        };
+        if merge_outcome == MergeOutcome::Merged {
+            self.pull_requests.finish(
+                pull_request_id,
+                PullRequestStatus::Merged,
+                &target_sha_before_merge,
+                &source_sha,
+            )?;
+        }
+        Ok(merge_outcome)
+    }
+
+    /// Closes without merging; its commits and diff stay viewable from the branches' current commits.
+    pub fn close_pull_request(&self, pull_request_id: i64) -> Result<()> {
+        let pull_request = self.open_pull_request(pull_request_id)?;
+        let target_sha = git::resolve_commit_sha(&self.top_level_path, &pull_request.target_branch)?;
+        let source_sha = git::resolve_commit_sha(&self.top_level_path, &pull_request.source_branch)?;
+        self.pull_requests
+            .finish(pull_request_id, PullRequestStatus::Closed, &target_sha, &source_sha)
+    }
+
     fn open_pull_request(&self, pull_request_id: i64) -> Result<PullRequest> {
         let pull_request = self.pull_requests.get(pull_request_id)?;
         if pull_request.status != PullRequestStatus::Open {
@@ -124,5 +191,26 @@ impl Repository {
             )));
         }
         Ok(pull_request)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MergeOutcome {
+    Merged,
+    /// Files git reported as conflicting; the merge was aborted and the pull request stays open.
+    Conflicts(Vec<String>),
+}
+
+fn merge_in_worktree(worktree_path: &Path, source_branch: &str) -> Result<MergeOutcome> {
+    match git::run_git(worktree_path, &["merge", "--no-ff", "--no-edit", source_branch]) {
+        Ok(_) => Ok(MergeOutcome::Merged),
+        Err(merge_error) => {
+            let conflicted_files = git::conflicted_files(worktree_path)?;
+            if conflicted_files.is_empty() {
+                return Err(merge_error);
+            }
+            git::run_git(worktree_path, &["merge", "--abort"])?;
+            Ok(MergeOutcome::Conflicts(conflicted_files))
+        }
     }
 }

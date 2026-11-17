@@ -162,3 +162,8 @@ pub fn has_uncommitted_changes(working_dir: &Path) -> Result<bool> {
             .is_empty(),
     )
 }
+
+pub fn conflicted_files(working_dir: &Path) -> Result<Vec<String>> {
+    let output = run_git(working_dir, &["diff", "--name-only", "--diff-filter=U"])?;
+    Ok(output.lines().map(str::to_owned).collect())
+}

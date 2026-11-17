@@ -61,7 +61,7 @@ pub fn view(app: &Dialectic, k: &Kit) -> El {
     if let Some(banner) = error_banner(app, k) {
         content = content.child(banner);
     }
-    page(app, k, content.child(table))
+    page(content.child(table))
 }
 
 fn pull_request_row(pull_request: &PullRequest, k: &Kit) -> El {

@@ -84,5 +84,5 @@ pub fn view(app: &Dialectic, k: &Kit, overlay_layer: &mut Vec<El>) -> El {
     if let Some(banner) = error_banner(app, k) {
         content = content.child(banner);
     }
-    page(app, k, content.child(markdown_editor::view(&app.draft, k)).child(actions))
+    page(content.child(markdown_editor::view(&app.draft, k)).child(actions))
 }

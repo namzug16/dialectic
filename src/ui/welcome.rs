@@ -52,7 +52,7 @@ pub fn view(app: &Dialectic, k: &Kit) -> El {
         project_rows = project_rows.child(saved_project_row(index, saved_project, k));
     }
 
-    row().w_full().h_full().child(introduction).child(
+    row().w_full().h_full().window_drag().child(introduction).child(
         col()
             .grow(1.0)
             .h_full()

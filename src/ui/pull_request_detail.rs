@@ -1,6 +1,6 @@
 //! One pull request: GitHub's header and its Overview, Commits and Files changed tabs.
 
-use super::{Dialectic, branch_flow, error_banner, markdown_editor, repository_header, status_badge, tab_strip};
+use super::{Dialectic, branch_flow, error_banner, markdown_editor, status_badge, tab_strip};
 use crate::db::{MergeMethod, PullRequest, PullRequestStatus};
 use crate::git::CommitSummary;
 use rune::{El, Tx, col, row, text};
@@ -91,7 +91,7 @@ pub fn view(app: &Dialectic, detail: &PullRequestDetail, k: &Kit) -> El {
         COMMITS_TAB => scrolling_column(commit_list(&detail.commits, k)),
         _ => scrolling_column(overview(app, detail, k)),
     };
-    col().w_full().h_full().child(repository_header(app, k)).child(top).child(tab_body)
+    col().w_full().grow(1.0).child(top).child(tab_body)
 }
 
 fn title_font(k: &Kit) -> rune::tok::TextStyle {

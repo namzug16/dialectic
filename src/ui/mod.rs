@@ -298,12 +298,21 @@ pub fn view(app: &Dialectic, cx: &mut Cx<Dialectic>) -> El {
             None => pull_request_list::view(app, &k),
         },
     };
-    rune_kit::root(col().w_full().h_full().fill(k.c.bg_base).child(screen), overlay_layer)
+    // The window draws no title bar of its own (`App::titlebar`): the repository header is the band, with
+    // the traffic lights (macOS) or caption buttons (Windows) over its ends; the welcome screen drags whole.
+    let insets = cx.chrome_insets();
+    let mut window_content = col().w_full().h_full().fill(k.c.bg_base);
+    if app.screen != Screen::Welcome {
+        window_content = window_content.child(repository_header(app, &k, insets));
+    }
+    rune_kit::root(window_content.child(screen), overlay_layer)
 }
+
+const TITLEBAR_HEIGHT: f32 = 52.0;
 
 /// The bar over every repository screen: one labelled back button (to the pull request list, or from
 /// the list to the repositories), then the repository's name and path.
-fn repository_header(app: &Dialectic, k: &Kit) -> El {
+fn repository_header(app: &Dialectic, k: &Kit, insets: rune::ChromeInsets) -> El {
     let (repository_name, repository_path) = app
         .repository
         .as_ref()
@@ -327,8 +336,10 @@ fn repository_header(app: &Dialectic, k: &Kit) -> El {
     row()
         .key("repository-header")
         .w_full()
-        .h(52.0)
-        .px(16.0)
+        .h(TITLEBAR_HEIGHT)
+        .window_drag()
+        .pl(insets.leading + 16.0)
+        .pr(insets.trailing + 16.0)
         .gap(12.0)
         .items_center()
         .fill(k.c.layer_01)
@@ -339,9 +350,9 @@ fn repository_header(app: &Dialectic, k: &Kit) -> El {
         .child(text(repository_path).font(k.ty.caption()).color(k.c.text_faint))
 }
 
-/// A repository screen: the header over a scrolling, centred column at most 1012 points wide, as GitHub's.
-pub fn page(app: &Dialectic, k: &Kit, content: El) -> El {
-    col().w_full().h_full().child(repository_header(app, k)).child(
+/// A repository screen's body (under the header): a scrolling, centred column at most 1012 points wide, as GitHub's.
+pub fn page(content: El) -> El {
+    col().w_full().grow(1.0).child(
         col()
             .key("page-scroll")
             .w_full()
@@ -527,5 +538,5 @@ pub fn run() {
         families: ("Inter", "ui-monospace, Menlo, Inter"),
         ..AppSpec::new("Dialectic", (1100.0, 760.0), Dialectic::from_command_line, view)
     };
-    App::new(spec).modifier_keys().run();
+    App::new(spec).modifier_keys().titlebar(rune::Titlebar::new(TITLEBAR_HEIGHT)).run();
 }

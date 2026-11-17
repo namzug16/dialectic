@@ -1,9 +1,9 @@
 //! The desktop app: one window whose `Screen` picks what `view` draws.
 
+mod pull_request_list;
 mod welcome;
 
-use crate::db::ProjectStore;
-use crate::db::SavedProject;
+use crate::db::{ProjectStore, PullRequest, PullRequestStatus, SavedProject};
 use crate::repository::Repository;
 use rune::{App, AppSpec, Cx, El, col, row, text};
 use rune_kit::Kit;
@@ -21,6 +21,8 @@ pub struct Dialectic {
     pub project_store: Option<ProjectStore>,
     pub saved_projects: Vec<SavedProject>,
     pub repository: Option<Repository>,
+    /// Reloaded each time the list shows, so pull requests opened elsewhere (another app, the CLI) appear.
+    pub pull_requests: Vec<PullRequest>,
     /// The last failure, shown on the current screen until the next action.
     pub error_message: Option<String>,
 }
@@ -41,6 +43,7 @@ impl Dialectic {
             project_store: None,
             saved_projects: Vec::new(),
             repository: None,
+            pull_requests: Vec::new(),
             error_message: None,
         };
         match ProjectStore::open_in_app_data_dir() {
@@ -88,6 +91,12 @@ impl Dialectic {
     pub fn show_pull_request_list(&mut self) {
         self.error_message = None;
         self.screen = Screen::PullRequestList;
+        if let Some(repository) = &self.repository {
+            match repository.list_pull_requests() {
+                Ok(pull_requests) => self.pull_requests = pull_requests,
+                Err(error) => self.error_message = Some(error.to_string()),
+            }
+        }
     }
 }
 
@@ -100,7 +109,7 @@ fn view(app: &Dialectic, cx: &mut Cx<Dialectic>) -> El {
     let mut overlay_layer = Vec::new();
     let screen = match app.screen {
         Screen::Welcome => welcome::view(app, &k),
-        Screen::PullRequestList => col().child(repository_header(app, &k)),
+        Screen::PullRequestList => pull_request_list::view(app, &k),
     };
     let _ = &mut overlay_layer;
     rune_kit::root(col().w_full().h_full().fill(k.c.bg_base).child(screen), overlay_layer)
@@ -133,6 +142,58 @@ fn repository_header(app: &Dialectic, k: &Kit) -> El {
                 .color(k.c.text_base)
                 .on_press(|app: &mut Dialectic| app.show_pull_request_list()),
         )
+}
+
+/// A repository screen: the header over a scrolling, centred column at most 1012 points wide, as GitHub's.
+pub fn page(app: &Dialectic, k: &Kit, content: El) -> El {
+    col().w_full().h_full().child(repository_header(app, k)).child(
+        col()
+            .key("page-scroll")
+            .w_full()
+            .grow(1.0)
+            .scroll(rune::ScrollSpec { stick_bottom: false })
+            .child(
+                row()
+                    .w_full()
+                    .justify_center()
+                    .padding(24.0)
+                    .child(col().w_full().max_w(1012.0).child(content)),
+            ),
+    )
+}
+
+/// GitHub's state colours: green open, purple merged, red closed.
+pub fn status_badge(status: PullRequestStatus, k: &Kit) -> El {
+    let (label, colour) = match status {
+        PullRequestStatus::Open => ("Open", "#1f883d"),
+        PullRequestStatus::Merged => ("Merged", "#8250df"),
+        PullRequestStatus::Closed => ("Closed", "#cf222e"),
+    };
+    row()
+        .key("status-badge")
+        .px(12.0)
+        .py(4.0)
+        .radius(999.0)
+        .fill(rune::color::hex(colour).unwrap_or(k.c.text_muted))
+        .child(text(label).font(k.ty.ui_medium).color(k.c.white))
+}
+
+/// `source → target` as two monospace branch chips.
+pub fn branch_flow(source_branch: &str, target_branch: &str, k: &Kit) -> El {
+    let chip = |branch_name: &str| {
+        row()
+            .px(6.0)
+            .py(2.0)
+            .radius(k.radius.sm)
+            .fill(k.c.info.bg)
+            .child(text(branch_name.to_owned()).font(k.ty.mono).color(k.c.info.fg))
+    };
+    row()
+        .gap(6.0)
+        .items_center()
+        .child(chip(source_branch))
+        .child(text("→").font(k.ty.ui).color(k.c.text_muted))
+        .child(chip(target_branch))
 }
 
 /// A one-line error in the danger colour, or nothing.

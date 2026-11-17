@@ -182,3 +182,30 @@ pub fn predicted_merge_conflicts(working_dir: &Path, target: &str, source: &str)
     // The first line is the merged tree's id; the conflicted paths follow, up to a blank line.
     Ok(output.lines().skip(1).take_while(|line| !line.is_empty()).map(str::to_owned).collect())
 }
+
+/// Everything committing would record: tracked changes against HEAD, plus untracked files as new files.
+pub fn uncommitted_diff(working_dir: &Path) -> Result<String> {
+    let mut diff = run_git(working_dir, &["diff", "--no-color", "--no-ext-diff", "HEAD", "--"])?;
+    let untracked_files = run_git(working_dir, &["ls-files", "--others", "--exclude-standard", "-z"])?;
+    for untracked_file in untracked_files.split('\0').filter(|path| !path.is_empty()) {
+        let (_, file_diff) = run_git_accepting_exit_codes(
+            working_dir,
+            &["diff", "--no-color", "--no-ext-diff", "--no-index", "--", "/dev/null", untracked_file],
+            &[0, 1],
+        )?;
+        diff.push_str(&file_diff);
+    }
+    Ok(diff)
+}
+
+/// Tracked and untracked changes: whether there is anything for `commit_all` to record.
+pub fn has_changes_to_commit(working_dir: &Path) -> Result<bool> {
+    Ok(!run_git(working_dir, &["status", "--porcelain"])?.trim().is_empty())
+}
+
+/// Stages every change, new and deleted files included, and commits it.
+pub fn commit_all(working_dir: &Path, message: &str) -> Result<()> {
+    run_git(working_dir, &["add", "--all"])?;
+    run_git(working_dir, &["commit", "--quiet", "--message", message])?;
+    Ok(())
+}

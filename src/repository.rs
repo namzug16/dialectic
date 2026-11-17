@@ -123,6 +123,41 @@ impl Repository {
         git::predicted_merge_conflicts(&self.top_level_path, &pull_request.target_branch, &pull_request.source_branch)
     }
 
+    /// The opened checkout's uncommitted changes, untracked files included, as unified `git diff` text.
+    pub fn uncommitted_diff(&self) -> Result<String> {
+        git::uncommitted_diff(&self.top_level_path)
+    }
+
+    pub fn commit_all_changes(&self, message: &str) -> Result<()> {
+        let message = message.trim();
+        if message.is_empty() {
+            return Err(Error("a commit needs a message describing the change".into()));
+        }
+        if !git::has_changes_to_commit(&self.top_level_path)? {
+            return Err(Error("there are no changes to commit".into()));
+        }
+        git::commit_all(&self.top_level_path, message)
+    }
+
+    /// Checks out another branch. Refused with uncommitted changes, which git would otherwise carry along.
+    pub fn switch_branch(&self, branch: &str) -> Result<()> {
+        if git::has_uncommitted_changes(&self.top_level_path)? {
+            return Err(Error(format!("you have uncommitted changes; commit them before switching to '{branch}'")));
+        }
+        git::run_git(&self.top_level_path, &["switch", "--quiet", branch])?;
+        Ok(())
+    }
+
+    /// Creates a branch from the current commit and checks it out, taking any uncommitted changes along.
+    pub fn create_branch(&self, branch: &str) -> Result<()> {
+        let branch = branch.trim();
+        if branch.is_empty() {
+            return Err(Error("a branch needs a name".into()));
+        }
+        git::run_git(&self.top_level_path, &["switch", "--quiet", "--create", branch])?;
+        Ok(())
+    }
+
     /// Merges the source branch into the target branch with git:
     /// - `MergeCommit` runs a standard `git merge --no-ff`.
     /// - `Rebase` replays the source's commits onto the target in a temporary detached worktree (the source

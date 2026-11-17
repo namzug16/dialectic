@@ -202,3 +202,27 @@ fn conflicts_are_predicted_before_merging_without_touching_the_checkout() {
     assert_eq!(common::git(temporary_dir.path(), &["rev-parse", "main"]), main_before);
     assert!(common::git(temporary_dir.path(), &["status", "--porcelain"]).is_empty());
 }
+
+#[test]
+fn uncommitted_changes_can_be_viewed_committed_and_carried_to_a_new_branch() {
+    let (temporary_dir, repository) = open_demo_repository();
+    std::fs::write(temporary_dir.path().join("app.txt"), "edited\n").unwrap();
+    std::fs::write(temporary_dir.path().join("notes.txt"), "new file\n").unwrap();
+
+    let diff = repository.uncommitted_diff().unwrap();
+    assert!(diff.contains("+edited") && diff.contains("+new file"), "untracked files are included: {diff}");
+
+    assert!(repository.switch_branch("feature").unwrap_err().0.contains("uncommitted"));
+    assert!(repository.commit_all_changes("  ").unwrap_err().0.contains("message"));
+
+    repository.create_branch("my-work").unwrap();
+    assert_eq!(repository.current_branch().as_deref(), Some("my-work"));
+    repository.commit_all_changes("Edit the app and add notes").unwrap();
+    assert!(repository.uncommitted_diff().unwrap().is_empty());
+    assert!(repository.commit_all_changes("again").unwrap_err().0.contains("no changes"));
+    assert!(common::git(temporary_dir.path(), &["ls-tree", "--name-only", "my-work"]).contains("notes.txt"));
+
+    repository.switch_branch("main").unwrap();
+    assert_eq!(repository.current_branch().as_deref(), Some("main"));
+    assert!(!temporary_dir.path().join("notes.txt").exists());
+}

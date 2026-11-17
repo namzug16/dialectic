@@ -1,0 +1,3 @@
+# Rune's workspace pins some dependencies to git revisions that cargo's built-in fetcher can't find.
+[net]
+git-fetch-with-cli = true

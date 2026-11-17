@@ -43,9 +43,11 @@ screenshots: ## Render every screen headless into target/screenshots
 		DIALECTIC_DATA_DIR=$(SCREENSHOT_DATA_DIR) $(DIALECTIC_DEBUG) $(DEMO_DIR) --pull-request 1 --scene $$scene --chrome \
 			--snap $(SCREENSHOT_DIR)/$$scene.png >/dev/null || exit 1; \
 	done
-	@# Pull request 2 conflicts: the scene runs the real merge, which git aborts.
-	DIALECTIC_DATA_DIR=$(SCREENSHOT_DATA_DIR) $(DIALECTIC_DEBUG) $(DEMO_DIR) --pull-request 2 --scene pull-request-conflicts --chrome \
-		--snap $(SCREENSHOT_DIR)/pull-request-conflicts.png >/dev/null
+	@# Pull request 2's branches conflict, so its merge is blocked.
+	@for scene in pull-request-conflicts pull-request-conflicts-files changes; do \
+		DIALECTIC_DATA_DIR=$(SCREENSHOT_DATA_DIR) $(DIALECTIC_DEBUG) $(DEMO_DIR) --pull-request 2 --scene $$scene --chrome \
+			--snap $(SCREENSHOT_DIR)/$$scene.png >/dev/null || exit 1; \
+	done
 	@echo "Screenshots in $(SCREENSHOT_DIR)"
 
 install: ## Put dialectic on your PATH (cargo install), for you and your agents

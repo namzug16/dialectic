@@ -177,8 +177,13 @@ impl Dialectic {
         let commits = repository.commits(&pull_request)?;
         self.pull_request_diff =
             pull_request_detail::diff_state(&repository.diff(&pull_request)?, self.saved_diff_mode());
-        self.pull_request_detail =
-            Some(PullRequestDetail { pull_request, commits, selected_tab, merge_conflicts: Vec::new() });
+        self.pull_request_detail = Some(PullRequestDetail {
+            pull_request,
+            commits,
+            selected_tab,
+            merge_conflicts: Vec::new(),
+            is_editing: false,
+        });
         Ok(())
     }
 
@@ -193,6 +198,43 @@ impl Dialectic {
                 if let Some(detail) = &mut self.pull_request_detail {
                     detail.merge_conflicts = conflicted_files;
                 }
+            }
+            Err(error) => self.error_message = Some(error.to_string()),
+        }
+    }
+
+    /// Closes without merging; the pull request keeps its commits and diff.
+    pub fn close_shown_pull_request(&mut self) {
+        let (Some(repository), Some(detail)) = (&self.repository, &self.pull_request_detail) else { return };
+        self.error_message = None;
+        match repository.close_pull_request(detail.pull_request.id) {
+            Ok(()) => self.reload_shown_pull_request(),
+            Err(error) => self.error_message = Some(error.to_string()),
+        }
+    }
+
+    pub fn start_editing_shown_pull_request(&mut self) {
+        let Some(detail) = &mut self.pull_request_detail else { return };
+        self.draft = MarkdownDraft::with_text(&detail.pull_request.title, &detail.pull_request.description);
+        detail.is_editing = true;
+        detail.selected_tab = pull_request_detail::OVERVIEW_TAB;
+        self.error_message = None;
+    }
+
+    pub fn cancel_editing_shown_pull_request(&mut self) {
+        if let Some(detail) = &mut self.pull_request_detail {
+            detail.is_editing = false;
+        }
+        self.error_message = None;
+    }
+
+    pub fn save_shown_pull_request_edit(&mut self) {
+        let (Some(repository), Some(detail)) = (&self.repository, &self.pull_request_detail) else { return };
+        match repository.edit_pull_request(detail.pull_request.id, &self.draft.title.text, &self.draft.description.text)
+        {
+            Ok(()) => {
+                self.error_message = None;
+                self.reload_shown_pull_request();
             }
             Err(error) => self.error_message = Some(error.to_string()),
         }
@@ -241,7 +283,7 @@ pub fn kit(cx: &Cx<Dialectic>) -> Kit {
     Kit::neutral(cx.system_dark())
 }
 
-fn view(app: &Dialectic, cx: &mut Cx<Dialectic>) -> El {
+pub fn view(app: &Dialectic, cx: &mut Cx<Dialectic>) -> El {
     let k = kit(cx);
     let mut overlay_layer = Vec::new();
     let screen = match app.screen {
@@ -428,6 +470,10 @@ const SCENES: &[Scene] = &[
     ("pull-request-conflicts", |app| {
         show_scene_pull_request(app, pull_request_detail::OVERVIEW_TAB);
         app.merge_shown_pull_request();
+    }),
+    ("pull-request-edit", |app| {
+        show_scene_pull_request(app, pull_request_detail::OVERVIEW_TAB);
+        app.start_editing_shown_pull_request();
     }),
     ("pull-request-files", |app| {
         show_scene_pull_request(app, pull_request_detail::FILES_CHANGED_TAB);

@@ -17,6 +17,8 @@ pub struct PullRequestDetail {
     pub selected_tab: usize,
     /// Files the last merge attempt reported as conflicting (that merge was aborted).
     pub merge_conflicts: Vec<String>,
+    /// The title and description are in `Dialectic::draft`, being edited.
+    pub is_editing: bool,
 }
 
 pub fn view(app: &Dialectic, detail: &PullRequestDetail, k: &Kit) -> El {
@@ -51,7 +53,16 @@ pub fn view(app: &Dialectic, detail: &PullRequestDetail, k: &Kit) -> El {
                 .gap(8.0)
                 .items_center()
                 .child(text(pull_request.title.clone()).font(title_font(k)).color(k.c.text_strong))
-                .child(text(format!("#{}", pull_request.id)).font(title_font(k)).color(k.c.text_faint)),
+                .child(text(format!("#{}", pull_request.id)).font(title_font(k)).color(k.c.text_faint).grow(1.0))
+                .child(if pull_request.status == PullRequestStatus::Open && !detail.is_editing {
+                    Button::new("Edit")
+                        .variant(ButtonVariant::Outline)
+                        .on_press(|app: &mut Dialectic| app.start_editing_shown_pull_request())
+                        .build(k)
+                        .key("edit-button")
+                } else {
+                    col()
+                }),
         )
         .child(
             row()
@@ -78,7 +89,7 @@ pub fn view(app: &Dialectic, detail: &PullRequestDetail, k: &Kit) -> El {
     let tab_body = match detail.selected_tab {
         FILES_CHANGED_TAB => files_changed(app, k),
         COMMITS_TAB => scrolling_column(commit_list(&detail.commits, k)),
-        _ => scrolling_column(overview(detail, k)),
+        _ => scrolling_column(overview(app, detail, k)),
     };
     col().w_full().h_full().child(repository_header(app, k)).child(top).child(tab_body)
 }
@@ -108,8 +119,34 @@ fn scrolling_column(content: El) -> El {
         .child(row().w_full().justify_center().padding(24.0).child(col().w_full().max_w(1012.0).child(content)))
 }
 
-fn overview(detail: &PullRequestDetail, k: &Kit) -> El {
+fn overview(app: &Dialectic, detail: &PullRequestDetail, k: &Kit) -> El {
     let pull_request = &detail.pull_request;
+    if detail.is_editing {
+        let edit_actions = row()
+            .w_full()
+            .gap(8.0)
+            .justify_end()
+            .child(
+                Button::new("Cancel")
+                    .variant(ButtonVariant::Ghost)
+                    .on_press(|app: &mut Dialectic| app.cancel_editing_shown_pull_request())
+                    .build(k)
+                    .key("cancel-edit-button"),
+            )
+            .child(
+                Button::new("Save")
+                    .variant(ButtonVariant::Submit)
+                    .on_press(|app: &mut Dialectic| app.save_shown_pull_request_edit())
+                    .build(k)
+                    .key("save-edit-button"),
+            );
+        return col()
+            .key("edit-form")
+            .w_full()
+            .gap(12.0)
+            .child(markdown_editor::view(&app.draft, k))
+            .child(edit_actions);
+    }
     let description = if pull_request.description.trim().is_empty() {
         text("No description provided.").font(k.ty.ui).color(k.c.text_faint)
     } else {
@@ -197,12 +234,22 @@ fn merge_box(detail: &PullRequestDetail, k: &Kit) -> El {
 }
 
 fn merge_buttons(k: &Kit) -> El {
-    row().gap(8.0).child(
-        Button::new("Merge pull request")
-            .variant(ButtonVariant::Submit)
-            .on_press(|app: &mut Dialectic| app.merge_shown_pull_request())
-            .build(k),
-    )
+    row()
+        .gap(8.0)
+        .child(
+            Button::new("Merge pull request")
+                .variant(ButtonVariant::Submit)
+                .on_press(|app: &mut Dialectic| app.merge_shown_pull_request())
+                .build(k)
+                .key("merge-button"),
+        )
+        .child(
+            Button::new("Close pull request")
+                .variant(ButtonVariant::Outline)
+                .on_press(|app: &mut Dialectic| app.close_shown_pull_request())
+                .build(k)
+                .key("close-button"),
+        )
 }
 
 fn heading(heading_text: &str, k: &Kit) -> El {

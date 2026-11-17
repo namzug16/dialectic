@@ -18,7 +18,8 @@ pub fn view(app: &Dialectic, k: &Kit) -> El {
             Button::new("New pull request")
                 .variant(ButtonVariant::Submit)
                 .on_press(|app: &mut Dialectic| app.show_new_pull_request())
-                .build(k),
+                .build(k)
+                .key("new-pull-request-button"),
         );
 
     let mut table = col()

@@ -67,7 +67,8 @@ pub fn view(app: &Dialectic, k: &Kit, overlay_layer: &mut Vec<El>) -> El {
             Button::new("Create pull request")
                 .variant(ButtonVariant::Submit)
                 .on_press(|app: &mut Dialectic| app.create_pull_request_from_draft())
-                .build(k),
+                .build(k)
+                .key("create-button"),
         );
 
     let mut content = col()

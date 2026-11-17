@@ -110,7 +110,7 @@ impl Dialectic {
                     self.error_message = Some(error.to_string());
                 }
                 self.repository = Some(repository);
-                self.show_pull_request_list();
+                self.show_changes();
             }
             Err(error) => {
                 self.error_message = Some(error.to_string());
@@ -286,12 +286,20 @@ impl Dialectic {
     pub fn show_pull_request_list(&mut self) {
         self.error_message = None;
         self.screen = Screen::PullRequestList;
+        self.reload_pull_requests();
+    }
+
+    fn reload_pull_requests(&mut self) {
         if let Some(repository) = &self.repository {
             match repository.list_pull_requests() {
                 Ok(pull_requests) => self.pull_requests = pull_requests,
                 Err(error) => self.error_message = Some(error.to_string()),
             }
         }
+    }
+
+    pub fn open_pull_request_count(&self) -> usize {
+        self.pull_requests.iter().filter(|pull_request| pull_request.status == PullRequestStatus::Open).count()
     }
 }
 
@@ -304,8 +312,10 @@ impl Dialectic {
         self.screen = Screen::Changes;
     }
 
-    /// Re-reads the branch and the uncommitted changes, which are edited outside the app.
+    /// Re-reads the branch and the uncommitted changes, which are edited outside the app, and the pull
+    /// requests, whose open count the screen points at.
     pub fn reload_changes(&mut self) {
+        self.reload_pull_requests();
         let Some(repository) = &self.repository else { return };
         let loaded =
             repository.local_branches().and_then(|local_branches| Ok((local_branches, repository.uncommitted_diff()?)));
@@ -382,15 +392,16 @@ pub fn view(app: &Dialectic, cx: &mut Cx<Dialectic>) -> El {
 
 const TITLEBAR_HEIGHT: f32 = 52.0;
 
-/// The bar over every repository screen: one labelled back button (to the pull request list, or from
-/// the list to the repositories), the repository's name and path, then Your changes.
+/// The bar over every repository screen: one labelled back button (to the repositories from the two
+/// top screens, else to the pull request list), the repository's name and path, then the way to the
+/// other top screen: Your changes, or, from there, Pull requests (loud while any are open).
 fn repository_header(app: &Dialectic, k: &Kit, insets: rune::ChromeInsets) -> El {
     let (repository_name, repository_path) = app
         .repository
         .as_ref()
         .map(|repository| (repository.name(), repository.top_level_path.display().to_string()))
         .unwrap_or_default();
-    let back_button = if app.screen == Screen::PullRequestList {
+    let back_button = if matches!(app.screen, Screen::Changes | Screen::PullRequestList) {
         Button::new("← Repositories")
             .variant(ButtonVariant::Ghost)
             .help("Back to the list of repositories")
@@ -419,9 +430,9 @@ fn repository_header(app: &Dialectic, k: &Kit, insets: rune::ChromeInsets) -> El
         .child(back_button)
         .child(col().w(1.0).h(20.0).fill(k.c.border_weak))
         .child(text(repository_name).key("repository-name").font(k.ty.body_medium).color(k.c.text_strong))
-        .child(text(repository_path).font(k.ty.caption()).color(k.c.text_faint).grow(1.0))
+        .child(text(repository_path).font(k.ty.caption()).color(k.c.text_faint).truncate().shrink().grow(1.0))
         .child(if app.screen == Screen::Changes {
-            col()
+            pull_requests_button(app.open_pull_request_count(), k)
         } else {
             Button::new("Your changes")
                 .variant(ButtonVariant::Outline)
@@ -430,6 +441,42 @@ fn repository_header(app: &Dialectic, k: &Kit, insets: rune::ChromeInsets) -> El
                 .build(k)
                 .key("show-changes-button")
         })
+}
+
+/// While pull requests wait for review: GitHub's open green with a count pill, in both themes (the kit's
+/// Submit button is white on dark), so nobody misses them. Otherwise a plain outline button.
+pub fn pull_requests_button(open_pull_request_count: usize, k: &Kit) -> El {
+    if open_pull_request_count == 0 {
+        return Button::new("Pull requests")
+            .variant(ButtonVariant::Outline)
+            .on_press(|app: &mut Dialectic| app.show_pull_request_list())
+            .build(k)
+            .key("show-pull-requests-button");
+    }
+    let label = if open_pull_request_count == 1 { "Pull request to review" } else { "Pull requests to review" };
+    let open_green = rune::color::hex("#1f883d").unwrap_or(k.c.success.fg);
+    row()
+        .key("show-pull-requests-button")
+        .role("button")
+        .label(format!("{open_pull_request_count} {label}"))
+        .focusable(true)
+        .px(12.0)
+        .py(6.0)
+        .gap(8.0)
+        .items_center()
+        .radius(k.radius.md)
+        .fill(open_green)
+        .hover(rune::color::hex("#1a7f37").unwrap_or(open_green))
+        .on_press(|app: &mut Dialectic| app.show_pull_request_list())
+        .child(
+            row()
+                .px(8.0)
+                .py(1.0)
+                .radius(999.0)
+                .fill(k.c.white)
+                .child(text(open_pull_request_count.to_string()).font(k.ty.ui_medium).color(open_green)),
+        )
+        .child(text(label).font(k.ty.ui_medium).color(k.c.white))
 }
 
 /// A repository screen's body (under the header): a scrolling, centred column at most 1012 points wide, as GitHub's.

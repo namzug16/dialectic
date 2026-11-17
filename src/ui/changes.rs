@@ -2,7 +2,7 @@
 //! so the whole way from editing files to opening a pull request stays in the app.
 
 use super::pull_request_detail::files_changed;
-use super::{Dialectic, error_banner};
+use super::{Dialectic, error_banner, pull_requests_button};
 use rune::{El, TextEdit, Tx, col, row, text};
 use rune_kit::diff::DiffState;
 use rune_kit::{Button, ButtonVariant, Kit, Select, TextInput};
@@ -99,11 +99,9 @@ pub fn view(app: &Dialectic, k: &Kit, overlay_layer: &mut Vec<El>) -> El {
     if let Some(banner) = error_banner(app, k) {
         content = content.child(banner);
     }
-    content = content.child(if changed_file_count == 0 {
-        nothing_to_commit(changes, on_default_branch, k)
-    } else {
-        commit_row(changes, changed_file_count, k)
-    });
+    if changed_file_count > 0 {
+        content = content.child(commit_row(changes, changed_file_count, k));
+    }
 
     let top = col()
         .w_full()
@@ -112,17 +110,18 @@ pub fn view(app: &Dialectic, k: &Kit, overlay_layer: &mut Vec<El>) -> El {
         .items_center()
         .border_sides([0.0, 0.0, 1.0, 0.0], k.c.border_weak)
         .child(content);
-    let mut screen = col().w_full().grow(1.0).child(top);
-    if changed_file_count > 0 {
-        screen = screen.child(files_changed(
+    let body = if changed_file_count == 0 {
+        nothing_to_commit(changes, on_default_branch, app.open_pull_request_count(), k)
+    } else {
+        files_changed(
             app,
             |app: &Dialectic| &app.working_changes.diff,
             |app: &mut Dialectic| &mut app.working_changes.diff,
             &[],
             k,
-        ));
-    }
-    screen
+        )
+    };
+    col().w_full().grow(1.0).child(top).child(body)
 }
 
 /// Commits everything: a person new to git shouldn't have to learn the staging area first.
@@ -153,25 +152,51 @@ fn commit_row(changes: &WorkingChanges, changed_file_count: usize, k: &Kit) -> E
         )
 }
 
-/// After committing on a work branch, the next step is a pull request: offer it right here.
-fn nothing_to_commit(changes: &WorkingChanges, on_default_branch: bool, k: &Kit) -> El {
-    let mut empty_state = row()
+/// Centred in the empty space: says there's nothing to commit, then points at what to do instead,
+/// loudest when pull requests are waiting for review.
+fn nothing_to_commit(changes: &WorkingChanges, on_default_branch: bool, open_pull_request_count: usize, k: &Kit) -> El {
+    let mut empty_state = col()
         .key("no-changes")
         .w_full()
-        .padding(16.0)
-        .gap(12.0)
+        .max_w(560.0)
+        .gap(16.0)
         .items_center()
-        .radius(k.radius.md)
-        .border(1.0, k.c.border_weak)
-        .child(text("No uncommitted changes.").font(k.ty.ui).color(k.c.text_muted).grow(1.0));
+        .child(text("No uncommitted changes").font(k.ty.body_medium).color(k.c.text_strong))
+        .child(
+            text("Edit files in this repository and they'll show up here, ready to commit.")
+                .font(k.ty.ui)
+                .color(k.c.text_muted)
+                .wrap(),
+        );
+    if open_pull_request_count > 0 {
+        let waiting = if open_pull_request_count == 1 {
+            "1 pull request is waiting for review".to_owned()
+        } else {
+            format!("{open_pull_request_count} pull requests are waiting for review")
+        };
+        empty_state = empty_state.child(
+            col()
+                .key("pull-requests-waiting")
+                .w_full()
+                .padding(20.0)
+                .gap(12.0)
+                .items_center()
+                .radius(k.radius.md)
+                .fill(k.c.success.bg)
+                .border(2.0, k.c.success.border)
+                .child(text(waiting).font(k.ty.body_medium).color(k.c.success.fg))
+                .child(pull_requests_button(open_pull_request_count, k)),
+        );
+    }
+    // After committing on a work branch, the next step is a pull request: offer it right here.
     if !on_default_branch && changes.current_branch.is_some() {
         empty_state = empty_state.child(
             Button::new("Open a pull request")
-                .variant(ButtonVariant::Submit)
+                .variant(if open_pull_request_count > 0 { ButtonVariant::Outline } else { ButtonVariant::Submit })
                 .on_press(|app: &mut Dialectic| app.show_new_pull_request())
                 .build(k)
                 .key("open-pull-request-from-changes"),
         );
     }
-    empty_state
+    col().w_full().grow(1.0).padding(24.0).center().child(empty_state)
 }

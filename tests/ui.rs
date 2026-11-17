@@ -33,6 +33,9 @@ fn open_review_and_merge_a_pull_request_then_hit_a_conflict() {
     app.open_repository(&repository_dir);
     let mut runtime = Runtime::new(app, view, (1100.0, 760.0), Env { system_dark: false, scale: 2.0 });
     runtime.frame(0.0);
+    assert_eq!(runtime.state.screen, Screen::Changes, "a repository opens on your changes");
+    assert!(runtime.find("no-changes").is_some() && runtime.find("pull-requests-waiting").is_none());
+    press(&mut runtime, "show-pull-requests-button");
     assert_eq!(runtime.state.screen, Screen::PullRequestList);
 
     press(&mut runtime, "new-pull-request-button");
@@ -78,9 +81,14 @@ fn open_review_and_merge_a_pull_request_then_hit_a_conflict() {
     assert_eq!(runtime.state.pull_request_detail.as_ref().unwrap().pull_request.status, PullRequestStatus::Closed);
 
     // Your changes: branch off main, commit everything, then open a pull request from it.
+    runtime.update(|app, _| {
+        app.repository.as_ref().unwrap().create_pull_request("Change one again", "", "conflict", "main").unwrap();
+    });
+    press(&mut runtime, "back-to-pull-requests");
     press(&mut runtime, "show-changes-button");
     assert_eq!(runtime.state.screen, Screen::Changes);
     assert!(runtime.find("no-changes").is_some());
+    assert!(runtime.find("pull-requests-waiting").is_some(), "an open pull request is called out");
     std::fs::write(repository_dir.join("notes.txt"), "a new file\n").unwrap();
     press(&mut runtime, "refresh-changes-button");
     assert_eq!(runtime.state.working_changes.diff.files().len(), 1);
@@ -105,8 +113,6 @@ fn open_review_and_merge_a_pull_request_then_hit_a_conflict() {
     runtime.update(|app, _| app.switch_branch("main"));
     assert_eq!(runtime.state.working_changes.current_branch.as_deref(), Some("main"));
 
-    press(&mut runtime, "back-to-pull-requests");
-    assert_eq!(runtime.state.screen, Screen::PullRequestList);
     press(&mut runtime, "back-to-repositories");
     assert_eq!(runtime.state.screen, Screen::Welcome);
 }

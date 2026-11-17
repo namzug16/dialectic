@@ -5,7 +5,7 @@ use crate::db::{PullRequest, PullRequestStatus};
 use crate::git::CommitSummary;
 use rune::{El, Tx, col, row, text};
 use rune_kit::diff::{DiffMode, DiffState, DiffView};
-use rune_kit::{Kit, SegmentedControl};
+use rune_kit::{Button, ButtonVariant, Kit, SegmentedControl};
 
 pub const OVERVIEW_TAB: usize = 0;
 pub const COMMITS_TAB: usize = 1;
@@ -15,6 +15,8 @@ pub struct PullRequestDetail {
     pub pull_request: PullRequest,
     pub commits: Vec<CommitSummary>,
     pub selected_tab: usize,
+    /// Files the last merge attempt reported as conflicting (that merge was aborted).
+    pub merge_conflicts: Vec<String>,
 }
 
 pub fn view(app: &Dialectic, detail: &PullRequestDetail, k: &Kit) -> El {
@@ -133,7 +135,82 @@ fn overview(detail: &PullRequestDetail, k: &Kit) -> El {
                 ),
         )
         .child(col().w_full().padding(16.0).child(description));
-    col().w_full().gap(16.0).child(description_card)
+    col().w_full().gap(16.0).child(description_card).child(merge_box(detail, k))
+}
+
+/// GitHub's merge box: the merge button while open, the outcome after.
+fn merge_box(detail: &PullRequestDetail, k: &Kit) -> El {
+    let pull_request = &detail.pull_request;
+    let card = |accent: &str| {
+        col()
+            .key("merge-box")
+            .w_full()
+            .padding(16.0)
+            .gap(12.0)
+            .radius(k.radius.md)
+            .border(1.0, k.c.border_weak)
+            .border_sides([0.0, 0.0, 0.0, 4.0], rune::color::hex(accent).unwrap_or(k.c.border_strong))
+    };
+    match pull_request.status {
+        PullRequestStatus::Merged => card("#8250df").child(heading(
+            &format!("Merged into {} on {} UTC", pull_request.target_branch, merged_or_closed_at(pull_request)),
+            k,
+        )),
+        PullRequestStatus::Closed => card("#cf222e").child(heading(
+            &format!("Closed without merging on {} UTC", merged_or_closed_at(pull_request)),
+            k,
+        )),
+        PullRequestStatus::Open if !detail.merge_conflicts.is_empty() => {
+            let mut conflicted_files = col().key("conflicted-files").gap(4.0);
+            for conflicted_file in &detail.merge_conflicts {
+                conflicted_files =
+                    conflicted_files.child(text(format!("• {conflicted_file}")).font(k.ty.mono).color(k.c.text_base));
+            }
+            card("#cf222e")
+                .child(heading("This branch has conflicts that must be resolved", k))
+                .child(
+                    text(format!(
+                        "git merge reported conflicts in these files, so the merge was aborted and {} is unchanged. \
+                         Resolve them on {} (for example, merge {} into it), then merge again.",
+                        pull_request.target_branch, pull_request.source_branch, pull_request.target_branch
+                    ))
+                    .font(k.ty.ui)
+                    .color(k.c.text_muted)
+                    .wrap(),
+                )
+                .child(conflicted_files)
+                .child(merge_buttons(k))
+        }
+        PullRequestStatus::Open => card("#1f883d")
+            .child(heading("Ready to merge", k))
+            .child(
+                text(format!(
+                    "Runs git merge --no-ff {} into {}. If git reports conflicts, nothing changes and the files are listed here.",
+                    pull_request.source_branch, pull_request.target_branch
+                ))
+                .font(k.ty.ui)
+                .color(k.c.text_muted)
+                .wrap(),
+            )
+            .child(merge_buttons(k)),
+    }
+}
+
+fn merge_buttons(k: &Kit) -> El {
+    row().gap(8.0).child(
+        Button::new("Merge pull request")
+            .variant(ButtonVariant::Submit)
+            .on_press(|app: &mut Dialectic| app.merge_shown_pull_request())
+            .build(k),
+    )
+}
+
+fn heading(heading_text: &str, k: &Kit) -> El {
+    text(heading_text.to_owned()).font(k.ty.body_medium).color(k.c.text_strong)
+}
+
+fn merged_or_closed_at(pull_request: &PullRequest) -> &str {
+    pull_request.merged_or_closed_at.as_deref().unwrap_or("an unknown date")
 }
 
 fn commit_list(commits: &[CommitSummary], k: &Kit) -> El {

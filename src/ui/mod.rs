@@ -7,7 +7,7 @@ mod pull_request_list;
 mod welcome;
 
 use crate::db::{ProjectStore, PullRequest, PullRequestStatus, SavedProject};
-use crate::repository::Repository;
+use crate::repository::{MergeOutcome, Repository};
 use markdown_editor::MarkdownDraft;
 use new_pull_request::NewPullRequestForm;
 use pull_request_detail::PullRequestDetail;
@@ -48,7 +48,15 @@ impl Dialectic {
     /// Opens the repository named by the first argument Rune doesn't use itself, else the welcome screen.
     fn from_command_line() -> Dialectic {
         let mut app = Dialectic::without_repository();
-        if let Some(repository_path) = rune::extra_args().iter().find(|argument| !argument.starts_with('-')) {
+        let extra_args = rune::extra_args();
+        let repository_path = extra_args
+            .iter()
+            .enumerate()
+            .find(|(index, argument)| {
+                !argument.starts_with('-') && (*index == 0 || extra_args[index - 1] != "--pull-request")
+            })
+            .map(|(_, argument)| argument);
+        if let Some(repository_path) = repository_path {
             app.open_repository(Path::new(repository_path));
         }
         app
@@ -169,8 +177,33 @@ impl Dialectic {
         let commits = repository.commits(&pull_request)?;
         self.pull_request_diff =
             pull_request_detail::diff_state(&repository.diff(&pull_request)?, self.saved_diff_mode());
-        self.pull_request_detail = Some(PullRequestDetail { pull_request, commits, selected_tab });
+        self.pull_request_detail =
+            Some(PullRequestDetail { pull_request, commits, selected_tab, merge_conflicts: Vec::new() });
         Ok(())
+    }
+
+    /// Merges with git; on conflicts the pull request stays open and the files show in the merge box.
+    pub fn merge_shown_pull_request(&mut self) {
+        let (Some(repository), Some(detail)) = (&self.repository, &self.pull_request_detail) else { return };
+        let pull_request_id = detail.pull_request.id;
+        self.error_message = None;
+        match repository.merge_pull_request(pull_request_id) {
+            Ok(MergeOutcome::Merged) => self.reload_shown_pull_request(),
+            Ok(MergeOutcome::Conflicts(conflicted_files)) => {
+                if let Some(detail) = &mut self.pull_request_detail {
+                    detail.merge_conflicts = conflicted_files;
+                }
+            }
+            Err(error) => self.error_message = Some(error.to_string()),
+        }
+    }
+
+    /// Re-reads the shown pull request after it changed, keeping the selected tab.
+    fn reload_shown_pull_request(&mut self) {
+        let Some(detail) = &self.pull_request_detail else { return };
+        if let Err(error) = self.load_pull_request(detail.pull_request.id, detail.selected_tab) {
+            self.error_message = Some(error.to_string());
+        }
     }
 
     fn saved_diff_mode(&self) -> DiffMode {
@@ -368,15 +401,18 @@ greet('Ada', punctuation='?')  # Hello, Ada?
 /// Headless stills of each screen: `dialectic <repo> --snap out.png --scene <name>` (see `make screenshots`).
 type Scene = (&'static str, fn(&mut Dialectic));
 
-/// Shows the newest open pull request (else the newest) on `tab`; scenes run against a repository that has some.
-fn show_newest_pull_request(app: &mut Dialectic, tab: usize) {
+/// Shows `--pull-request <id>` if given, else the newest open pull request (else the newest), on `tab`.
+fn show_scene_pull_request(app: &mut Dialectic, tab: usize) {
     app.show_pull_request_list();
-    let newest = app
-        .pull_requests
+    let extra_args = rune::extra_args();
+    let requested_id = extra_args
         .iter()
-        .find(|pull_request| pull_request.status == PullRequestStatus::Open)
-        .or(app.pull_requests.first());
-    if let Some(pull_request_id) = newest.map(|pull_request| pull_request.id) {
+        .position(|argument| argument == "--pull-request")
+        .and_then(|flag_index| extra_args.get(flag_index + 1))
+        .and_then(|id_text| id_text.parse::<i64>().ok());
+    let newest_open = app.pull_requests.iter().find(|pull_request| pull_request.status == PullRequestStatus::Open);
+    let shown_id = requested_id.or(newest_open.or(app.pull_requests.first()).map(|pull_request| pull_request.id));
+    if let Some(pull_request_id) = shown_id {
         app.show_pull_request(pull_request_id);
         if let Some(detail) = &mut app.pull_request_detail {
             detail.selected_tab = tab;
@@ -386,14 +422,19 @@ fn show_newest_pull_request(app: &mut Dialectic, tab: usize) {
 
 const SCENES: &[Scene] = &[
     ("pull-request-list", Dialectic::show_pull_request_list),
-    ("pull-request-overview", |app| show_newest_pull_request(app, pull_request_detail::OVERVIEW_TAB)),
-    ("pull-request-commits", |app| show_newest_pull_request(app, pull_request_detail::COMMITS_TAB)),
+    ("pull-request-overview", |app| show_scene_pull_request(app, pull_request_detail::OVERVIEW_TAB)),
+    ("pull-request-commits", |app| show_scene_pull_request(app, pull_request_detail::COMMITS_TAB)),
+    // Really runs the merge: point it at a pull request that conflicts (`--pull-request <id>`).
+    ("pull-request-conflicts", |app| {
+        show_scene_pull_request(app, pull_request_detail::OVERVIEW_TAB);
+        app.merge_shown_pull_request();
+    }),
     ("pull-request-files", |app| {
-        show_newest_pull_request(app, pull_request_detail::FILES_CHANGED_TAB);
+        show_scene_pull_request(app, pull_request_detail::FILES_CHANGED_TAB);
         app.pull_request_diff.set_mode(DiffMode::Unified);
     }),
     ("pull-request-files-split", |app| {
-        show_newest_pull_request(app, pull_request_detail::FILES_CHANGED_TAB);
+        show_scene_pull_request(app, pull_request_detail::FILES_CHANGED_TAB);
         app.pull_request_diff.set_mode(DiffMode::Split);
     }),
     ("new-pull-request", |app| {

@@ -73,4 +73,9 @@ fn open_review_and_merge_a_pull_request_then_hit_a_conflict() {
 
     press(&mut runtime, "close-button");
     assert_eq!(runtime.state.pull_request_detail.as_ref().unwrap().pull_request.status, PullRequestStatus::Closed);
+
+    press(&mut runtime, "back-to-pull-requests");
+    assert_eq!(runtime.state.screen, Screen::PullRequestList);
+    press(&mut runtime, "back-to-repositories");
+    assert_eq!(runtime.state.screen, Screen::Welcome);
 }

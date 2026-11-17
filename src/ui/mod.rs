@@ -12,8 +12,8 @@ use markdown_editor::MarkdownDraft;
 use new_pull_request::NewPullRequestForm;
 use pull_request_detail::PullRequestDetail;
 use rune::{App, AppSpec, Cx, El, KeyEvent, Tx, col, row, text};
-use rune_kit::Kit;
 use rune_kit::diff::{DiffMode, DiffState};
+use rune_kit::{Button, ButtonVariant, Kit};
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -298,33 +298,42 @@ pub fn view(app: &Dialectic, cx: &mut Cx<Dialectic>) -> El {
     rune_kit::root(col().w_full().h_full().fill(k.c.bg_base).child(screen), overlay_layer)
 }
 
-/// `repository-name / Pull requests`, GitHub's breadcrumb: the name returns to the welcome screen.
+/// The bar over every repository screen: one labelled back button (to the pull request list, or from
+/// the list to the repositories), then the repository's name and path.
 fn repository_header(app: &Dialectic, k: &Kit) -> El {
-    let repository_name = app.repository.as_ref().map(Repository::name).unwrap_or_default();
+    let (repository_name, repository_path) = app
+        .repository
+        .as_ref()
+        .map(|repository| (repository.name(), repository.top_level_path.display().to_string()))
+        .unwrap_or_default();
+    let back_button = if app.screen == Screen::PullRequestList {
+        Button::new("← Repositories")
+            .variant(ButtonVariant::Ghost)
+            .help("Back to the list of repositories")
+            .on_press(|app: &mut Dialectic| app.show_welcome())
+            .build(k)
+            .key("back-to-repositories")
+    } else {
+        Button::new("← All pull requests")
+            .variant(ButtonVariant::Ghost)
+            .help("Back to this repository's pull requests")
+            .on_press(|app: &mut Dialectic| app.show_pull_request_list())
+            .build(k)
+            .key("back-to-pull-requests")
+    };
     row()
         .key("repository-header")
         .w_full()
         .h(52.0)
-        .px(24.0)
-        .gap(8.0)
+        .px(16.0)
+        .gap(12.0)
         .items_center()
         .fill(k.c.layer_01)
         .border_sides([0.0, 0.0, 1.0, 0.0], k.c.border_weak)
-        .child(
-            text(repository_name)
-                .key("repository-name")
-                .font(k.ty.body_medium)
-                .color(k.c.text_accent)
-                .on_press(|app: &mut Dialectic| app.show_welcome()),
-        )
-        .child(text("/").font(k.ty.body).color(k.c.text_faint))
-        .child(
-            text("Pull requests")
-                .key("pull-requests-link")
-                .font(k.ty.body_medium)
-                .color(k.c.text_base)
-                .on_press(|app: &mut Dialectic| app.show_pull_request_list()),
-        )
+        .child(back_button)
+        .child(col().w(1.0).h(20.0).fill(k.c.border_weak))
+        .child(text(repository_name).key("repository-name").font(k.ty.body_medium).color(k.c.text_strong))
+        .child(text(repository_path).font(k.ty.caption()).color(k.c.text_faint))
 }
 
 /// A repository screen: the header over a scrolling, centred column at most 1012 points wide, as GitHub's.

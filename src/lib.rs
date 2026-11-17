@@ -4,6 +4,7 @@
 pub mod db;
 pub mod git;
 pub mod repository;
+pub mod ui;
 
 use std::fmt;
 

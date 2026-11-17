@@ -1,5 +1,6 @@
 //! The desktop app: one window whose `Screen` picks what `view` draws.
 
+mod changes;
 mod markdown_editor;
 mod new_pull_request;
 mod pull_request_detail;
@@ -8,6 +9,7 @@ mod welcome;
 
 use crate::db::{MergeMethod, ProjectStore, PullRequest, PullRequestStatus, SavedProject};
 use crate::repository::{MergeOutcome, Repository};
+use changes::WorkingChanges;
 use markdown_editor::MarkdownDraft;
 use new_pull_request::NewPullRequestForm;
 use pull_request_detail::PullRequestDetail;
@@ -22,6 +24,7 @@ pub enum Screen {
     PullRequestList,
     NewPullRequest,
     PullRequestDetail,
+    Changes,
 }
 
 pub struct Dialectic {
@@ -40,6 +43,8 @@ pub struct Dialectic {
     pub pull_request_detail: Option<PullRequestDetail>,
     /// The shown pull request's diff; kept outside `pull_request_detail` because `DiffView` borrows it by accessor.
     pub pull_request_diff: DiffState,
+    /// The opened checkout's branch and uncommitted changes, reloaded each time the Changes screen shows.
+    pub working_changes: WorkingChanges,
     /// The last failure, shown on the current screen until the next action.
     pub error_message: Option<String>,
 }
@@ -76,6 +81,7 @@ impl Dialectic {
             merge_method: MergeMethod::MergeCommit,
             pull_request_detail: None,
             pull_request_diff: DiffState::new(Vec::new()),
+            working_changes: WorkingChanges::default(),
             error_message: None,
         };
         match ProjectStore::open_in_app_data_dir() {
@@ -268,6 +274,7 @@ impl Dialectic {
     /// Switches the diff layout and remembers it for next time.
     pub fn set_diff_mode(&mut self, diff_mode: DiffMode) {
         self.pull_request_diff.set_mode(diff_mode);
+        self.working_changes.diff.set_mode(diff_mode);
         let mode_name = if diff_mode == DiffMode::Split { "split" } else { "unified" };
         if let Some(project_store) = &self.project_store
             && let Err(error) = project_store.set_setting(DIFF_MODE_SETTING, mode_name)
@@ -288,6 +295,64 @@ impl Dialectic {
     }
 }
 
+impl Dialectic {
+    pub fn show_changes(&mut self) {
+        self.error_message = None;
+        self.working_changes.commit_message = rune::TextEdit::default();
+        self.working_changes.new_branch_name = rune::TextEdit::default();
+        self.reload_changes();
+        self.screen = Screen::Changes;
+    }
+
+    /// Re-reads the branch and the uncommitted changes, which are edited outside the app.
+    pub fn reload_changes(&mut self) {
+        let Some(repository) = &self.repository else { return };
+        let loaded =
+            repository.local_branches().and_then(|local_branches| Ok((local_branches, repository.uncommitted_diff()?)));
+        match loaded {
+            Ok((local_branches, diff_text)) => {
+                let diff = pull_request_detail::diff_state(&diff_text, self.saved_diff_mode(), &[]);
+                let changes = &mut self.working_changes;
+                changes.local_branches = local_branches;
+                changes.current_branch = repository.current_branch();
+                changes.branch_picker_open = false;
+                changes.diff = diff;
+            }
+            Err(error) => self.error_message = Some(error.to_string()),
+        }
+    }
+
+    pub fn commit_all_changes(&mut self) {
+        let Some(repository) = &self.repository else { return };
+        match repository.commit_all_changes(&self.working_changes.commit_message.text) {
+            Ok(()) => self.show_changes(),
+            Err(error) => self.error_message = Some(error.to_string()),
+        }
+    }
+
+    pub fn switch_branch(&mut self, branch: &str) {
+        let Some(repository) = &self.repository else { return };
+        self.working_changes.branch_picker_open = false;
+        match repository.switch_branch(branch) {
+            Ok(()) => self.show_changes(),
+            Err(error) => self.error_message = Some(error.to_string()),
+        }
+    }
+
+    /// Keeps the commit message: a new branch is usually made right before committing to it.
+    pub fn create_branch(&mut self) {
+        let Some(repository) = &self.repository else { return };
+        match repository.create_branch(&self.working_changes.new_branch_name.text) {
+            Ok(()) => {
+                self.error_message = None;
+                self.working_changes.new_branch_name = rune::TextEdit::default();
+                self.reload_changes();
+            }
+            Err(error) => self.error_message = Some(error.to_string()),
+        }
+    }
+}
+
 pub fn kit(cx: &Cx<Dialectic>) -> Kit {
     Kit::neutral(cx.system_dark())
 }
@@ -303,6 +368,7 @@ pub fn view(app: &Dialectic, cx: &mut Cx<Dialectic>) -> El {
             Some(detail) => pull_request_detail::view(app, detail, &k),
             None => pull_request_list::view(app, &k),
         },
+        Screen::Changes => changes::view(app, &k, &mut overlay_layer),
     };
     // The window draws no title bar of its own (`App::titlebar`): the repository header is the band, with
     // the traffic lights (macOS) or caption buttons (Windows) over its ends; the welcome screen drags whole.
@@ -317,7 +383,7 @@ pub fn view(app: &Dialectic, cx: &mut Cx<Dialectic>) -> El {
 const TITLEBAR_HEIGHT: f32 = 52.0;
 
 /// The bar over every repository screen: one labelled back button (to the pull request list, or from
-/// the list to the repositories), then the repository's name and path.
+/// the list to the repositories), the repository's name and path, then Your changes.
 fn repository_header(app: &Dialectic, k: &Kit, insets: rune::ChromeInsets) -> El {
     let (repository_name, repository_path) = app
         .repository
@@ -353,7 +419,17 @@ fn repository_header(app: &Dialectic, k: &Kit, insets: rune::ChromeInsets) -> El
         .child(back_button)
         .child(col().w(1.0).h(20.0).fill(k.c.border_weak))
         .child(text(repository_name).key("repository-name").font(k.ty.body_medium).color(k.c.text_strong))
-        .child(text(repository_path).font(k.ty.caption()).color(k.c.text_faint))
+        .child(text(repository_path).font(k.ty.caption()).color(k.c.text_faint).grow(1.0))
+        .child(if app.screen == Screen::Changes {
+            col()
+        } else {
+            Button::new("Your changes")
+                .variant(ButtonVariant::Outline)
+                .help("See, commit and branch your uncommitted changes")
+                .on_press(|app: &mut Dialectic| app.show_changes())
+                .build(k)
+                .key("show-changes-button")
+        })
 }
 
 /// A repository screen's body (under the header): a scrolling, centred column at most 1012 points wide, as GitHub's.
@@ -509,6 +585,7 @@ const SCENES: &[Scene] = &[
     // Point these at a pull request whose branches conflict (`--pull-request <id>`).
     ("pull-request-conflicts", |app| show_scene_pull_request(app, pull_request_detail::OVERVIEW_TAB)),
     ("pull-request-conflicts-files", |app| show_scene_pull_request(app, pull_request_detail::FILES_CHANGED_TAB)),
+    ("changes", Dialectic::show_changes),
     ("pull-request-rebase", |app| {
         show_scene_pull_request(app, pull_request_detail::OVERVIEW_TAB);
         app.merge_method = MergeMethod::Rebase;
@@ -538,12 +615,18 @@ const SCENES: &[Scene] = &[
 
 /// The diff's own keys while it shows: j/k between hunks, ]/[ between files.
 fn on_key(app: &mut Dialectic, key_event: &KeyEvent, tx: &mut Tx) -> bool {
-    let showing_files = app.screen == Screen::PullRequestDetail
-        && app
-            .pull_request_detail
-            .as_ref()
-            .is_some_and(|detail| detail.selected_tab == pull_request_detail::FILES_CHANGED_TAB);
-    showing_files && app.pull_request_diff.key(key_event, tx)
+    match app.screen {
+        Screen::Changes => app.working_changes.diff.key(key_event, tx),
+        Screen::PullRequestDetail
+            if app
+                .pull_request_detail
+                .as_ref()
+                .is_some_and(|detail| detail.selected_tab == pull_request_detail::FILES_CHANGED_TAB) =>
+        {
+            app.pull_request_diff.key(key_event, tx)
+        }
+        _ => false,
+    }
 }
 
 pub fn run() {

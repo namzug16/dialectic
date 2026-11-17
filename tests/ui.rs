@@ -77,6 +77,34 @@ fn open_review_and_merge_a_pull_request_then_hit_a_conflict() {
     press(&mut runtime, "close-button");
     assert_eq!(runtime.state.pull_request_detail.as_ref().unwrap().pull_request.status, PullRequestStatus::Closed);
 
+    // Your changes: branch off main, commit everything, then open a pull request from it.
+    press(&mut runtime, "show-changes-button");
+    assert_eq!(runtime.state.screen, Screen::Changes);
+    assert!(runtime.find("no-changes").is_some());
+    std::fs::write(repository_dir.join("notes.txt"), "a new file\n").unwrap();
+    press(&mut runtime, "refresh-changes-button");
+    assert_eq!(runtime.state.working_changes.diff.files().len(), 1);
+    assert!(runtime.find("default-branch-warning").is_some(), "warns before committing straight to main");
+    runtime.update(|app, _| app.working_changes.new_branch_name = TextEdit::new("notes"));
+    press(&mut runtime, "create-branch-button");
+    assert_eq!(
+        runtime.state.working_changes.current_branch.as_deref(),
+        Some("notes"),
+        "{:?}",
+        runtime.state.error_message
+    );
+    runtime.update(|app, _| app.working_changes.commit_message = TextEdit::new("Add notes"));
+    press(&mut runtime, "commit-button");
+    assert!(runtime.state.working_changes.diff.files().is_empty(), "{:?}", runtime.state.error_message);
+    assert_eq!(common::git(&repository_dir, &["log", "-1", "--format=%s", "notes"]).trim(), "Add notes");
+    press(&mut runtime, "open-pull-request-from-changes");
+    assert_eq!(runtime.state.new_pull_request_form.source_branch.as_deref(), Some("notes"));
+
+    runtime.update(|app, _| app.show_changes());
+    settle(&mut runtime);
+    runtime.update(|app, _| app.switch_branch("main"));
+    assert_eq!(runtime.state.working_changes.current_branch.as_deref(), Some("main"));
+
     press(&mut runtime, "back-to-pull-requests");
     assert_eq!(runtime.state.screen, Screen::PullRequestList);
     press(&mut runtime, "back-to-repositories");

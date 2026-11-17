@@ -95,7 +95,13 @@ pub fn view(app: &Dialectic, detail: &PullRequestDetail, k: &Kit) -> El {
         .child(col().w_full().max_w(1012.0).child(tabs));
 
     let tab_body = match detail.selected_tab {
-        FILES_CHANGED_TAB => files_changed(app, &detail.merge_conflicts, k),
+        FILES_CHANGED_TAB => files_changed(
+            app,
+            |app: &Dialectic| &app.pull_request_diff,
+            |app: &mut Dialectic| &mut app.pull_request_diff,
+            &detail.merge_conflicts,
+            k,
+        ),
         COMMITS_TAB => scrolling_column(commit_list(&detail.commits, k)),
         _ => scrolling_column(overview(app, detail, k)),
     };
@@ -419,10 +425,17 @@ fn commit_list(commits: &[CommitSummary], k: &Kit) -> El {
     list
 }
 
-/// GitHub's Files changed: a file list beside the diff; `conflicted_files` are flagged in red (and come
+/// GitHub's Files changed: a file list beside the diff. Shared by pull requests and uncommitted changes, so
+/// it takes accessors to whichever `DiffState` it shows; `conflicted_files` are flagged in red (and come
 /// first, as `diff_state` sorted them).
-fn files_changed(app: &Dialectic, conflicted_files: &[String], k: &Kit) -> El {
-    let diff = &app.pull_request_diff;
+pub fn files_changed(
+    app: &Dialectic,
+    get_diff: fn(&Dialectic) -> &DiffState,
+    get_diff_mut: fn(&mut Dialectic) -> &mut DiffState,
+    conflicted_files: &[String],
+    k: &Kit,
+) -> El {
+    let diff = get_diff(app);
     let (total_additions, total_deletions) = diff
         .files()
         .iter()
@@ -470,7 +483,7 @@ fn files_changed(app: &Dialectic, conflicted_files: &[String], k: &Kit) -> El {
             .items_center()
             .radius(k.radius.sm)
             .hover(k.c.hover)
-            .on_press_tx(move |app: &mut Dialectic, tx: &mut Tx| app.pull_request_diff.scroll_to_file(file_index, tx));
+            .on_press_tx(move |app: &mut Dialectic, tx: &mut Tx| get_diff_mut(app).scroll_to_file(file_index, tx));
         if is_conflicted {
             file_row = file_row.fill(k.c.danger.bg).border(1.0, k.c.danger.border).child(warning_mark(k));
         }
@@ -487,12 +500,12 @@ fn files_changed(app: &Dialectic, conflicted_files: &[String], k: &Kit) -> El {
         col().grow(1.0).padding(24.0).child(text("No changes.").font(k.ty.ui).color(k.c.text_faint))
     } else {
         col().grow(1.0).h_full().child(
-            DiffView::new(|app: &Dialectic| &app.pull_request_diff, |app: &mut Dialectic| &mut app.pull_request_diff)
+            DiffView::new(get_diff, get_diff_mut)
                 .key("diff-view")
                 .header_actions({
                     let (conflicted_files, k) = (conflicted_files.to_vec(), k.clone());
                     move |app: &Dialectic, file_index| {
-                        let is_conflicted = app.pull_request_diff.files().get(file_index).is_some_and(|file| {
+                        let is_conflicted = get_diff(app).files().get(file_index).is_some_and(|file| {
                             conflicted_files.iter().any(|conflicted_file| conflicted_file == file.path())
                         });
                         if is_conflicted { conflict_chip(&k) } else { col() }

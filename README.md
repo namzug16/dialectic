@@ -31,18 +31,23 @@ cargo run --release -- /path/to/repo   # the same without make
 - **Pull request detail**: title, status, branches and rendered description, with Overview,
   Commits and Files changed tabs. Files changed is a file list beside a diff with line numbers,
   word-level highlights and a remembered Unified/Split toggle (`j`/`k` hunks, `]`/`[` files).
-  Overview has Edit, Merge pull request and Close pull request.
+  Overview has Edit, Close pull request, and the merge button with its Merge method picker.
 
 ### How merging works
 
-Merge pull request runs `git merge --no-ff <source>` into the target branch:
+Pick a merge method above the merge button, as on GitHub:
 
-- in the worktree that has the target checked out, refusing if it has uncommitted changes;
-- otherwise in a temporary worktree that is removed afterwards.
+- **Create a merge commit** runs `git merge --no-ff <source>` into the target branch.
+- **Rebase and merge** replays the source's commits onto the target in a temporary detached
+  worktree, then fast-forwards the target to them: a linear history, no merge commit. The source
+  branch itself never moves.
 
-If git succeeds, the pull request is marked merged. If git reports conflicts, Dialectic lists
-the conflicted files, runs `git merge --abort` and leaves the target exactly as it was; resolve
-the conflicts on the source branch and merge again.
+The target is updated in the worktree that has it checked out (Dialectic refuses if that
+checkout has uncommitted changes), or, when no worktree has it, without touching any checkout.
+
+If git succeeds, the pull request is marked merged (and remembers how). If git reports
+conflicts, Dialectic lists the conflicted files, aborts the merge or rebase and leaves the target
+exactly as it was; resolve the conflicts on the source branch and try again.
 
 Commits and the diff are read live from the branches while a pull request is open (new commits
 on the source show up automatically), and frozen when it is merged or closed.

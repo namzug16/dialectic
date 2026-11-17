@@ -38,7 +38,7 @@ screenshots: ## Render every screen headless into target/screenshots
 	@mkdir -p $(SCREENSHOT_DIR)
 	DIALECTIC_DATA_DIR=$(SCREENSHOT_DATA_DIR) $(DIALECTIC_DEBUG) --snap $(SCREENSHOT_DIR)/welcome.png
 	@for scene in pull-request-list new-pull-request new-pull-request-preview pull-request-overview \
-		pull-request-commits pull-request-files pull-request-files-split pull-request-edit; do \
+		pull-request-commits pull-request-files pull-request-files-split pull-request-edit pull-request-rebase; do \
 		DIALECTIC_DATA_DIR=$(SCREENSHOT_DATA_DIR) $(DIALECTIC_DEBUG) $(DEMO_DIR) --pull-request 1 --scene $$scene \
 			--snap $(SCREENSHOT_DIR)/$$scene.png >/dev/null || exit 1; \
 	done

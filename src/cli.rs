@@ -281,6 +281,7 @@ fn pull_request_json(pull_request: &PullRequest) -> Value {
         "status": pull_request.status.as_str(),
         "created_at": pull_request.created_at,
         "merged_or_closed_at": pull_request.merged_or_closed_at,
+        "merge_method": pull_request.merge_method.map(|merge_method| merge_method.as_str()),
     })
 }
 

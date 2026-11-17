@@ -1,7 +1,7 @@
 //! One pull request: GitHub's header and its Overview, Commits and Files changed tabs.
 
 use super::{Dialectic, branch_flow, error_banner, markdown_editor, repository_header, status_badge, tab_strip};
-use crate::db::{PullRequest, PullRequestStatus};
+use crate::db::{MergeMethod, PullRequest, PullRequestStatus};
 use crate::git::CommitSummary;
 use rune::{El, Tx, col, row, text};
 use rune_kit::diff::{DiffMode, DiffState, DiffView};
@@ -172,11 +172,11 @@ fn overview(app: &Dialectic, detail: &PullRequestDetail, k: &Kit) -> El {
                 ),
         )
         .child(col().w_full().padding(16.0).child(description));
-    col().w_full().gap(16.0).child(description_card).child(merge_box(detail, k))
+    col().w_full().gap(16.0).child(description_card).child(merge_box(detail, app.merge_method, k))
 }
 
 /// GitHub's merge box: the merge button while open, the outcome after.
-fn merge_box(detail: &PullRequestDetail, k: &Kit) -> El {
+fn merge_box(detail: &PullRequestDetail, chosen_merge_method: MergeMethod, k: &Kit) -> El {
     let pull_request = &detail.pull_request;
     let card = |accent: &str| {
         col()
@@ -189,14 +189,16 @@ fn merge_box(detail: &PullRequestDetail, k: &Kit) -> El {
             .border_sides([0.0, 0.0, 0.0, 4.0], rune::color::hex(accent).unwrap_or(k.c.border_strong))
     };
     match pull_request.status {
-        PullRequestStatus::Merged => card("#8250df").child(heading(
-            &format!("Merged into {} on {} UTC", pull_request.target_branch, merged_or_closed_at(pull_request)),
-            k,
-        )),
-        PullRequestStatus::Closed => card("#cf222e").child(heading(
-            &format!("Closed without merging on {} UTC", merged_or_closed_at(pull_request)),
-            k,
-        )),
+        PullRequestStatus::Merged => {
+            let how =
+                if pull_request.merge_method == Some(MergeMethod::Rebase) { "Rebased and merged" } else { "Merged" };
+            card("#8250df").child(heading(
+                &format!("{how} into {} on {} UTC", pull_request.target_branch, merged_or_closed_at(pull_request)),
+                k,
+            ))
+        }
+        PullRequestStatus::Closed => card("#cf222e")
+            .child(heading(&format!("Closed without merging on {} UTC", merged_or_closed_at(pull_request)), k)),
         PullRequestStatus::Open if !detail.merge_conflicts.is_empty() => {
             let mut conflicted_files = col().key("conflicted-files").gap(4.0);
             for conflicted_file in &detail.merge_conflicts {
@@ -207,8 +209,8 @@ fn merge_box(detail: &PullRequestDetail, k: &Kit) -> El {
                 .child(heading("This branch has conflicts that must be resolved", k))
                 .child(
                     text(format!(
-                        "git merge reported conflicts in these files, so the merge was aborted and {} is unchanged. \
-                         Resolve them on {} (for example, merge {} into it), then merge again.",
+                        "Git reported conflicts in these files, so it stopped and {} is unchanged. \
+                         Resolve them on {} (for example, merge or rebase {} into it), then try again.",
                         pull_request.target_branch, pull_request.source_branch, pull_request.target_branch
                     ))
                     .font(k.ty.ui)
@@ -216,28 +218,55 @@ fn merge_box(detail: &PullRequestDetail, k: &Kit) -> El {
                     .wrap(),
                 )
                 .child(conflicted_files)
-                .child(merge_buttons(k))
+                .child(merge_buttons(chosen_merge_method, k))
         }
         PullRequestStatus::Open => card("#1f883d")
             .child(heading("Ready to merge", k))
             .child(
                 text(format!(
-                    "Runs git merge --no-ff {} into {}. If git reports conflicts, nothing changes and the files are listed here.",
-                    pull_request.source_branch, pull_request.target_branch
+                    "{} If git reports conflicts, nothing changes and the files are listed here.",
+                    merge_method_explanation(chosen_merge_method, pull_request)
                 ))
                 .font(k.ty.ui)
                 .color(k.c.text_muted)
                 .wrap(),
             )
-            .child(merge_buttons(k)),
+            .child(merge_buttons(chosen_merge_method, k)),
     }
 }
 
-fn merge_buttons(k: &Kit) -> El {
-    row()
+fn merge_method_explanation(merge_method: MergeMethod, pull_request: &PullRequest) -> String {
+    let (source_branch, target_branch) = (&pull_request.source_branch, &pull_request.target_branch);
+    match merge_method {
+        MergeMethod::MergeCommit => {
+            format!("Runs git merge --no-ff {source_branch} into {target_branch}: its commits plus a merge commit.")
+        }
+        MergeMethod::Rebase => format!(
+            "Replays {source_branch}'s commits on top of {target_branch} and fast-forwards {target_branch}: \
+             a linear history with no merge commit. {source_branch} itself is left as it is."
+        ),
+    }
+}
+
+/// The merge method picker over GitHub's merge button (labelled for the chosen method) and Close.
+fn merge_buttons(chosen_merge_method: MergeMethod, k: &Kit) -> El {
+    let (merge_label, chosen_index) = match chosen_merge_method {
+        MergeMethod::MergeCommit => ("Merge pull request", 0),
+        MergeMethod::Rebase => ("Rebase and merge", 1),
+    };
+    let method_picker = SegmentedControl::new(&["Create a merge commit", "Rebase and merge"], Some(chosen_index))
+        .label("Merge method")
+        .fit()
+        .on_pick(|app: &mut Dialectic, picked_method, _: &mut Tx| {
+            app.merge_method = if picked_method == 1 { MergeMethod::Rebase } else { MergeMethod::MergeCommit };
+        })
+        .build(k)
+        .key("merge-method");
+    let buttons = row()
         .gap(8.0)
+        .items_center()
         .child(
-            Button::new("Merge pull request")
+            Button::new(merge_label)
                 .variant(ButtonVariant::Submit)
                 .on_press(|app: &mut Dialectic| app.merge_shown_pull_request())
                 .build(k)
@@ -249,7 +278,17 @@ fn merge_buttons(k: &Kit) -> El {
                 .on_press(|app: &mut Dialectic| app.close_shown_pull_request())
                 .build(k)
                 .key("close-button"),
+        );
+    col()
+        .gap(12.0)
+        .child(
+            row()
+                .gap(12.0)
+                .items_center()
+                .child(text("Merge method").font(k.ty.ui_medium).color(k.c.text_base))
+                .child(method_picker),
         )
+        .child(buttons)
 }
 
 fn heading(heading_text: &str, k: &Kit) -> El {

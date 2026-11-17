@@ -35,6 +35,8 @@ pub struct Dialectic {
     pub new_pull_request_form: NewPullRequestForm,
     /// The title and description being written: a new pull request's, or an open one's while editing.
     pub draft: MarkdownDraft,
+    /// The merge button's method; starts as a merge commit each launch.
+    pub merge_method: MergeMethod,
     pub pull_request_detail: Option<PullRequestDetail>,
     /// The shown pull request's diff; kept outside `pull_request_detail` because `DiffView` borrows it by accessor.
     pub pull_request_diff: DiffState,
@@ -71,6 +73,7 @@ impl Dialectic {
             pull_requests: Vec::new(),
             new_pull_request_form: NewPullRequestForm::default(),
             draft: MarkdownDraft::default(),
+            merge_method: MergeMethod::MergeCommit,
             pull_request_detail: None,
             pull_request_diff: DiffState::new(Vec::new()),
             error_message: None,
@@ -192,7 +195,7 @@ impl Dialectic {
         let (Some(repository), Some(detail)) = (&self.repository, &self.pull_request_detail) else { return };
         let pull_request_id = detail.pull_request.id;
         self.error_message = None;
-        match repository.merge_pull_request(pull_request_id, MergeMethod::MergeCommit) {
+        match repository.merge_pull_request(pull_request_id, self.merge_method) {
             Ok(MergeOutcome::Merged) => self.reload_shown_pull_request(),
             Ok(MergeOutcome::Conflicts(conflicted_files)) => {
                 if let Some(detail) = &mut self.pull_request_detail {
@@ -479,6 +482,10 @@ const SCENES: &[Scene] = &[
     ("pull-request-conflicts", |app| {
         show_scene_pull_request(app, pull_request_detail::OVERVIEW_TAB);
         app.merge_shown_pull_request();
+    }),
+    ("pull-request-rebase", |app| {
+        show_scene_pull_request(app, pull_request_detail::OVERVIEW_TAB);
+        app.merge_method = MergeMethod::Rebase;
     }),
     ("pull-request-edit", |app| {
         show_scene_pull_request(app, pull_request_detail::OVERVIEW_TAB);

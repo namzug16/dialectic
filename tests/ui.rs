@@ -2,7 +2,7 @@
 
 mod common;
 
-use dialectic::db::PullRequestStatus;
+use dialectic::db::{MergeMethod, PullRequestStatus};
 use dialectic::ui::{Dialectic, Screen, view};
 use rune::{Env, Runtime, TextEdit};
 
@@ -65,6 +65,8 @@ fn open_review_and_merge_a_pull_request_then_hit_a_conflict() {
     });
     settle(&mut runtime);
     press(&mut runtime, "create-button");
+    press(&mut runtime, "merge-method/segment1");
+    assert_eq!(runtime.state.merge_method, MergeMethod::Rebase);
     press(&mut runtime, "merge-button");
     let detail = runtime.state.pull_request_detail.as_ref().unwrap();
     assert_eq!(detail.merge_conflicts, vec!["app.txt".to_owned()]);

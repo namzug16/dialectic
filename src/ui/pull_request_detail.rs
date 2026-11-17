@@ -101,12 +101,12 @@ fn title_font(k: &Kit) -> rune::tok::TextStyle {
 /// "Linus wants to merge 2 commits:", followed by the `source → target` chips.
 fn activity_sentence(pull_request: &PullRequest, commit_count: usize) -> String {
     let commits = if commit_count == 1 { "1 commit".to_owned() } else { format!("{commit_count} commits") };
-    let verb = match pull_request.status {
-        PullRequestStatus::Open => "wants to merge",
-        PullRequestStatus::Merged => "merged",
-        PullRequestStatus::Closed => "proposed merging",
-    };
-    format!("{} {verb} {commits}:", pull_request.author)
+    // Only the author is recorded, so a merged pull request doesn't name who merged it.
+    match pull_request.status {
+        PullRequestStatus::Open => format!("{} wants to merge {commits}:", pull_request.author),
+        PullRequestStatus::Merged => format!("{commits} by {} merged:", pull_request.author),
+        PullRequestStatus::Closed => format!("{commits} by {}, closed without merging:", pull_request.author),
+    }
 }
 
 /// A tab body that scrolls inside the window, centred at GitHub's width.

@@ -1,0 +1,105 @@
+# Dialectic
+
+GitHub-style pull requests for a **local** Git repository. Two developers (or a developer and
+their agents) work on different branches of the same repository on one machine. One opens a
+pull request from their branch; the other reviews its commits and diff in Dialectic and merges
+it with a standard `git merge`.
+
+Built in Rust on [Rune](https://github.com/anomalyco/rune) (Anomaly's GPU-drawn UI framework),
+pinned to `dev` revision `842c28c2ca5dd1506c1e4a67052db61800aed721`.
+
+## Quick start
+
+```sh
+make demo                 # disposable two-developer repo with two pull requests, opened in the app
+make run REPO=~/code/app  # open your own repository (or run `make run` and pick one)
+cargo run --release -- /path/to/repo   # the same without make
+```
+
+`make help` lists every target: `run`, `build`, `test`, `check` (fmt, clippy, tests), `demo`,
+`screenshots`, `install`, `clean`.
+
+## The app
+
+- **Welcome** (Xcode-style): Open Repository… picks a folder with the native dialog; opened
+  repositories are remembered (`~/Library/Application Support/Dialectic/projects.db`).
+- **Pull requests**: open, merged and closed pull requests with their `source → target`
+  branches, and New pull request. The list reloads each time you return to it, so pull
+  requests opened by someone else's app or the CLI appear.
+- **New pull request**: pick two local branches, write a title and a Markdown description with
+  Write and Preview tabs (headings, lists, task checkboxes, links, inline code, fenced code).
+- **Pull request detail**: title, status, branches and rendered description, with Overview,
+  Commits and Files changed tabs. Files changed is a file list beside a diff with line numbers,
+  word-level highlights and a remembered Unified/Split toggle (`j`/`k` hunks, `]`/`[` files).
+  Overview has Edit, Merge pull request and Close pull request.
+
+### How merging works
+
+Merge pull request runs `git merge --no-ff <source>` into the target branch:
+
+- in the worktree that has the target checked out, refusing if it has uncommitted changes;
+- otherwise in a temporary worktree that is removed afterwards.
+
+If git succeeds, the pull request is marked merged. If git reports conflicts, Dialectic lists
+the conflicted files, runs `git merge --abort` and leaves the target exactly as it was; resolve
+the conflicts on the source branch and merge again.
+
+Commits and the diff are read live from the branches while a pull request is open (new commits
+on the source show up automatically), and frozen when it is merged or closed.
+
+### Where data lives
+
+Pull requests are stored in `dialectic.db` (SQLite) inside the repository's shared Git
+directory (`git rev-parse --git-common-dir`), so every worktree, app window and CLI call sees
+the same pull requests.
+
+## The CLI, for agents
+
+`make install` puts `dialectic` on your PATH. Agents open and maintain pull requests from the
+terminal; merging stays in the app, for a human.
+
+```sh
+dialectic guide                                    # the workflow and rules, written for agents
+dialectic pr create --target main --title "…" --description-file -   # source: current branch
+dialectic pr list [--status open|merged|closed] [--json]
+dialectic pr show <id> [--json]                    # commits and changed files
+dialectic pr diff <id>
+dialectic pr edit <id> [--title …] [--description … | --description-file …]
+dialectic pr close <id>
+```
+
+`-C <path>` picks the repository (any worktree). Exit codes: 0 success, 1 failure (reason on
+stderr), 2 invalid arguments. To teach your agents, add this to your `AGENTS.md` or `CLAUDE.md`:
+
+> To open a pull request, run `dialectic guide` and follow it.
+
+## Development
+
+```sh
+make check        # cargo fmt --check, clippy -D warnings, cargo test
+make screenshots  # renders every screen headless into target/screenshots
+```
+
+Tests cover the core against disposable repositories (`tests/repository.rs`), the CLI binary
+(`tests/cli.rs`) and the GUI clicked through headless with Rune's `Runtime` (`tests/ui.rs`).
+Screens can be rendered on their own: `target/debug/dialectic <repo> --scene <name> --snap out.png`
+(scenes are listed in `src/ui/mod.rs`; Rune's headless flags exist in debug builds).
+
+Cargo fetches Rune's git dependencies with the git CLI (`.cargo/config.toml`), because one of
+Rune's pinned revisions is unreachable with cargo's built-in fetcher. To update Rune, change the
+`rev` everywhere in `Cargo.toml`, including `[patch.crates-io]`, and copy that table from Rune's
+root `Cargo.toml` at the new revision.
+
+## Windows (not yet built)
+
+The code avoids macOS-only paths, but Windows builds haven't been tried. What a Windows build needs:
+
+- the MSVC toolchain (Rune's README lists MSVC or MinGW binutils) and Rust 1.99.1
+  (`rust-toolchain.toml` installs it);
+- `git` on `PATH`, since Dialectic runs the git CLI;
+- `CARGO_NET_GIT_FETCH_WITH_CLI=true`, already set by `.cargo/config.toml`;
+- plain `cargo` commands instead of `make` (the Makefile and the demo script assume a Unix
+  shell): `cargo run --release -- C:\path\to\repo`, `cargo test`.
+
+Saved projects go to `%APPDATA%\Dialectic\projects.db`. Rune's native folder dialog uses rfd on
+Windows.

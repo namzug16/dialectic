@@ -22,7 +22,12 @@ pub fn view(app: &Dialectic, k: &Kit) -> El {
                 .color(k.c.text_strong)
                 .grow(1.0),
         )
-        .child(Button::new("New pull request").variant(ButtonVariant::Submit).build(k));
+        .child(
+            Button::new("New pull request")
+                .variant(ButtonVariant::Submit)
+                .on_press(|app: &mut Dialectic| app.show_new_pull_request())
+                .build(k),
+        );
 
     let mut table = col()
         .key("pull-request-table")

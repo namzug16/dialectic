@@ -1,9 +1,10 @@
 //! One opened repository: its pull requests and the rules for creating, editing and finishing them.
 
-use crate::db::{NewPullRequest, PullRequest, PullRequestStatus, PullRequestStore};
+use crate::db::{MergeMethod, NewPullRequest, PullRequest, PullRequestStatus, PullRequestStore};
 use crate::git::{self, ChangedFile, CommitSummary};
 use crate::{Error, Result};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub struct Repository {
     pub top_level_path: PathBuf,
@@ -113,49 +114,77 @@ impl Repository {
         git::changed_files_since_merge_base(&self.top_level_path, &base, &head)
     }
 
-    /// Runs a standard `git merge --no-ff` of the source branch into the target branch. It merges in the
-    /// worktree that has the target checked out (refusing if it has uncommitted changes), or else in a
-    /// temporary worktree. On conflicts the merge is aborted, leaving the target as it was.
-    pub fn merge_pull_request(&self, pull_request_id: i64) -> Result<MergeOutcome> {
+    /// Merges the source branch into the target branch with git:
+    /// - `MergeCommit` runs a standard `git merge --no-ff`.
+    /// - `Rebase` replays the source's commits onto the target in a temporary detached worktree (the source
+    ///   branch never moves, as with GitHub's "Rebase and merge"), then fast-forwards the target to them.
+    ///
+    /// The target is updated in the worktree that has it checked out (refusing if it has uncommitted
+    /// changes), else without touching any checkout. On conflicts git's operation is aborted, leaving the
+    /// target as it was.
+    pub fn merge_pull_request(&self, pull_request_id: i64, merge_method: MergeMethod) -> Result<MergeOutcome> {
         let pull_request = self.open_pull_request(pull_request_id)?;
-        let target_sha_before_merge = git::resolve_commit_sha(&self.top_level_path, &pull_request.target_branch)?;
+        let target_branch = pull_request.target_branch.as_str();
+        let target_sha_before_merge = git::resolve_commit_sha(&self.top_level_path, target_branch)?;
         let source_sha = git::resolve_commit_sha(&self.top_level_path, &pull_request.source_branch)?;
 
         let worktree_with_target = git::worktrees(&self.top_level_path)?
             .into_iter()
-            .find(|(_, checked_out_branch)| checked_out_branch.as_deref() == Some(pull_request.target_branch.as_str()))
+            .find(|(_, checked_out_branch)| checked_out_branch.as_deref() == Some(target_branch))
             .map(|(worktree_path, _)| worktree_path);
-        let merge_outcome = match worktree_with_target {
-            Some(worktree_path) => {
-                if git::has_uncommitted_changes(&worktree_path)? {
-                    return Err(Error(format!(
-                        "'{}' is checked out in {} with uncommitted changes; commit or stash them, then merge again",
-                        pull_request.target_branch,
-                        worktree_path.display()
-                    )));
-                }
-                merge_in_worktree(&worktree_path, &pull_request.source_branch)?
+        if let Some(worktree_path) = &worktree_with_target
+            && git::has_uncommitted_changes(worktree_path)?
+        {
+            return Err(Error(format!(
+                "'{target_branch}' is checked out in {} with uncommitted changes; commit or stash them, then merge again",
+                worktree_path.display()
+            )));
+        }
+
+        let merge_outcome = match (merge_method, &worktree_with_target) {
+            (MergeMethod::MergeCommit, Some(worktree_path)) => {
+                merge_in_worktree(worktree_path, &pull_request.source_branch)?
             }
-            None => {
-                let temporary_worktree =
-                    std::env::temp_dir().join(format!("dialectic-merge-{}-{pull_request_id}", std::process::id()));
-                let temporary_worktree_text = temporary_worktree.to_string_lossy().into_owned();
-                git::run_git(
-                    &self.top_level_path,
-                    &["worktree", "add", "--quiet", &temporary_worktree_text, &pull_request.target_branch],
-                )?;
-                let merge_result = merge_in_worktree(&temporary_worktree, &pull_request.source_branch);
-                let removal_result =
-                    git::run_git(&self.top_level_path, &["worktree", "remove", "--force", &temporary_worktree_text]);
-                let merge_outcome = merge_result?;
-                removal_result?;
-                merge_outcome
+            (MergeMethod::MergeCommit, None) => {
+                self.in_temporary_worktree(pull_request_id, &[target_branch], |worktree_path| {
+                    merge_in_worktree(worktree_path, &pull_request.source_branch)
+                })?
+            }
+            (MergeMethod::Rebase, _) => {
+                let rebase_result =
+                    self.in_temporary_worktree(pull_request_id, &["--detach", &source_sha], |worktree_path| {
+                        rebase_onto(worktree_path, target_branch)
+                    })?;
+                match rebase_result {
+                    Err(conflicted_files) => MergeOutcome::Conflicts(conflicted_files),
+                    Ok(rebased_head_sha) => {
+                        match &worktree_with_target {
+                            Some(worktree_path) => {
+                                git::run_git(worktree_path, &["merge", "--ff-only", "--quiet", &rebased_head_sha])?;
+                            }
+                            // The old value makes git refuse if the target moved since we read it.
+                            None => {
+                                git::run_git(
+                                    &self.top_level_path,
+                                    &[
+                                        "update-ref",
+                                        &format!("refs/heads/{target_branch}"),
+                                        &rebased_head_sha,
+                                        &target_sha_before_merge,
+                                    ],
+                                )?;
+                            }
+                        }
+                        MergeOutcome::Merged
+                    }
+                }
             }
         };
         if merge_outcome == MergeOutcome::Merged {
             self.pull_requests.finish(
                 pull_request_id,
                 PullRequestStatus::Merged,
+                Some(merge_method),
                 &target_sha_before_merge,
                 &source_sha,
             )?;
@@ -163,12 +192,37 @@ impl Repository {
         Ok(merge_outcome)
     }
 
+    /// Runs `operation` in a new worktree made with `git worktree add <path> <checkout_arguments>`, then
+    /// removes the worktree whatever the operation returned.
+    fn in_temporary_worktree<T>(
+        &self,
+        pull_request_id: i64,
+        checkout_arguments: &[&str],
+        operation: impl FnOnce(&Path) -> Result<T>,
+    ) -> Result<T> {
+        // Unique per call: several merges (or test threads) in one process must not share a path.
+        static TEMPORARY_WORKTREE_COUNTER: AtomicU64 = AtomicU64::new(0);
+        let call_number = TEMPORARY_WORKTREE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let temporary_worktree = std::env::temp_dir()
+            .join(format!("dialectic-merge-{}-{pull_request_id}-{call_number}", std::process::id()));
+        let temporary_worktree_text = temporary_worktree.to_string_lossy().into_owned();
+        let mut add_arguments = vec!["worktree", "add", "--quiet", temporary_worktree_text.as_str()];
+        add_arguments.extend_from_slice(checkout_arguments);
+        git::run_git(&self.top_level_path, &add_arguments)?;
+        let operation_result = operation(&temporary_worktree);
+        let removal_result =
+            git::run_git(&self.top_level_path, &["worktree", "remove", "--force", &temporary_worktree_text]);
+        let value = operation_result?;
+        removal_result?;
+        Ok(value)
+    }
+
     /// Closes without merging; its commits and diff stay viewable from the branches' current commits.
     pub fn close_pull_request(&self, pull_request_id: i64) -> Result<()> {
         let pull_request = self.open_pull_request(pull_request_id)?;
         let target_sha = git::resolve_commit_sha(&self.top_level_path, &pull_request.target_branch)?;
         let source_sha = git::resolve_commit_sha(&self.top_level_path, &pull_request.source_branch)?;
-        self.pull_requests.finish(pull_request_id, PullRequestStatus::Closed, &target_sha, &source_sha)
+        self.pull_requests.finish(pull_request_id, PullRequestStatus::Closed, None, &target_sha, &source_sha)
     }
 
     fn open_pull_request(&self, pull_request_id: i64) -> Result<PullRequest> {
@@ -197,6 +251,22 @@ fn merge_in_worktree(worktree_path: &Path, source_branch: &str) -> Result<MergeO
             }
             git::run_git(worktree_path, &["merge", "--abort"])?;
             Ok(MergeOutcome::Conflicts(conflicted_files))
+        }
+    }
+}
+
+/// Rebases the worktree's (detached) HEAD onto `target_branch`: `Ok` with the rebased head, or `Err` with
+/// the files git reported as conflicting, after aborting the rebase.
+fn rebase_onto(worktree_path: &Path, target_branch: &str) -> Result<std::result::Result<String, Vec<String>>> {
+    match git::run_git(worktree_path, &["rebase", "--quiet", target_branch]) {
+        Ok(_) => Ok(Ok(git::resolve_commit_sha(worktree_path, "HEAD")?)),
+        Err(rebase_error) => {
+            let conflicted_files = git::conflicted_files(worktree_path)?;
+            if conflicted_files.is_empty() {
+                return Err(rebase_error);
+            }
+            git::run_git(worktree_path, &["rebase", "--abort"])?;
+            Ok(Err(conflicted_files))
         }
     }
 }

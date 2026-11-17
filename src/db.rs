@@ -33,6 +33,32 @@ impl PullRequestStatus {
     }
 }
 
+/// How a pull request's commits reached its target, as GitHub's merge button offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeMethod {
+    /// `git merge --no-ff`: the source's commits plus a merge commit.
+    MergeCommit,
+    /// The source's commits replayed onto the target, which then fast-forwards; no merge commit.
+    Rebase,
+}
+
+impl MergeMethod {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MergeMethod::MergeCommit => "merge",
+            MergeMethod::Rebase => "rebase",
+        }
+    }
+
+    pub fn parse(method_text: &str) -> Result<Self> {
+        match method_text {
+            "merge" => Ok(MergeMethod::MergeCommit),
+            "rebase" => Ok(MergeMethod::Rebase),
+            other => Err(Error(format!("unknown merge method '{other}' (expected merge or rebase)"))),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PullRequest {
     pub id: i64,
@@ -49,6 +75,8 @@ pub struct PullRequest {
     /// diff still show after the branches move on. `None` while open: those are read live.
     pub frozen_target_sha: Option<String>,
     pub frozen_source_sha: Option<String>,
+    /// Set once merged.
+    pub merge_method: Option<MergeMethod>,
 }
 
 pub struct NewPullRequest<'a> {
@@ -72,7 +100,7 @@ pub struct PullRequestStore {
 }
 
 const PULL_REQUEST_COLUMNS: &str = "id, title, description, source_branch, target_branch, author, status, \
-     created_at, merged_or_closed_at, frozen_target_sha, frozen_source_sha";
+     created_at, merged_or_closed_at, frozen_target_sha, frozen_source_sha, merge_method";
 
 impl PullRequestStore {
     pub fn open_in_git_dir(git_common_dir: &Path) -> Result<Self> {
@@ -93,9 +121,19 @@ impl PullRequestStore {
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 merged_or_closed_at TEXT,
                 frozen_target_sha TEXT,
-                frozen_source_sha TEXT
+                frozen_source_sha TEXT,
+                merge_method TEXT
             );",
         )?;
+        // Databases made before merge methods existed lack the column.
+        let has_merge_method_column: bool = connection.query_row(
+            "SELECT COUNT(*) > 0 FROM pragma_table_info('pull_requests') WHERE name = 'merge_method'",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_merge_method_column {
+            connection.execute_batch("ALTER TABLE pull_requests ADD COLUMN merge_method TEXT;")?;
+        }
         Ok(Self { connection })
     }
 
@@ -158,14 +196,22 @@ impl PullRequestStore {
         &self,
         pull_request_id: i64,
         final_status: PullRequestStatus,
+        merge_method: Option<MergeMethod>,
         frozen_target_sha: &str,
         frozen_source_sha: &str,
     ) -> Result<()> {
         let changed_rows = self.connection.execute(
             "UPDATE pull_requests
-             SET status = ?2, merged_or_closed_at = datetime('now'), frozen_target_sha = ?3, frozen_source_sha = ?4
+             SET status = ?2, merged_or_closed_at = datetime('now'), frozen_target_sha = ?3, frozen_source_sha = ?4,
+                 merge_method = ?5
              WHERE id = ?1 AND status = 'open'",
-            params![pull_request_id, final_status.as_str(), frozen_target_sha, frozen_source_sha],
+            params![
+                pull_request_id,
+                final_status.as_str(),
+                frozen_target_sha,
+                frozen_source_sha,
+                merge_method.map(MergeMethod::as_str)
+            ],
         )?;
         if changed_rows == 0 {
             return Err(Error(format!("pull request #{pull_request_id} is not open")));
@@ -177,6 +223,12 @@ impl PullRequestStore {
 impl rusqlite::types::FromSql for PullRequestStatus {
     fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
         PullRequestStatus::parse(value.as_str()?).map_err(|error| rusqlite::types::FromSqlError::Other(Box::new(error)))
+    }
+}
+
+impl rusqlite::types::FromSql for MergeMethod {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        MergeMethod::parse(value.as_str()?).map_err(|error| rusqlite::types::FromSqlError::Other(Box::new(error)))
     }
 }
 
@@ -193,6 +245,7 @@ fn read_pull_request_row(row: &Row) -> rusqlite::Result<PullRequest> {
         merged_or_closed_at: row.get(8)?,
         frozen_target_sha: row.get(9)?,
         frozen_source_sha: row.get(10)?,
+        merge_method: row.get(11)?,
     })
 }
 
@@ -295,17 +348,40 @@ mod tests {
 
         assert_eq!(store.find_open_between("feature", "main").unwrap(), Some(first_id));
         store.update_title_and_description(first_id, "Add login v2", "done").unwrap();
-        store.finish(first_id, PullRequestStatus::Merged, "aaa", "bbb").unwrap();
-        assert!(store.finish(first_id, PullRequestStatus::Closed, "x", "y").is_err());
+        store.finish(first_id, PullRequestStatus::Merged, Some(MergeMethod::Rebase), "aaa", "bbb").unwrap();
+        assert!(store.finish(first_id, PullRequestStatus::Closed, None, "x", "y").is_err());
 
         let merged = store.get(first_id).unwrap();
         assert_eq!((merged.title.as_str(), merged.status), ("Add login v2", PullRequestStatus::Merged));
         assert_eq!(merged.frozen_source_sha.as_deref(), Some("bbb"));
+        assert_eq!(merged.merge_method, Some(MergeMethod::Rebase));
         assert_eq!(store.find_open_between("feature", "main").unwrap(), None);
 
         let listed_ids: Vec<i64> = store.list().unwrap().iter().map(|pull_request| pull_request.id).collect();
         assert_eq!(listed_ids, vec![second_id, first_id], "open pull requests list first");
         assert!(store.get(99).is_err());
+    }
+
+    #[test]
+    fn a_database_from_before_merge_methods_gains_the_column() {
+        let temporary_dir = tempfile::tempdir().unwrap();
+        let database_path = temporary_dir.path().join("dialectic.db");
+        Connection::open(&database_path)
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE pull_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
+                 description TEXT NOT NULL, source_branch TEXT NOT NULL, target_branch TEXT NOT NULL,
+                 author TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
+                 created_at TEXT NOT NULL DEFAULT (datetime('now')), merged_or_closed_at TEXT,
+                 frozen_target_sha TEXT, frozen_source_sha TEXT);
+                 INSERT INTO pull_requests (title, description, source_branch, target_branch, author)
+                 VALUES ('old', '', 'feature', 'main', 'Ada');",
+            )
+            .unwrap();
+        let store = PullRequestStore::open(&database_path).unwrap();
+        assert_eq!(store.get(1).unwrap().merge_method, None);
+        store.finish(1, PullRequestStatus::Merged, Some(MergeMethod::MergeCommit), "a", "b").unwrap();
+        assert_eq!(store.get(1).unwrap().merge_method, Some(MergeMethod::MergeCommit));
     }
 
     #[test]

@@ -6,7 +6,7 @@ mod pull_request_detail;
 mod pull_request_list;
 mod welcome;
 
-use crate::db::{ProjectStore, PullRequest, PullRequestStatus, SavedProject};
+use crate::db::{MergeMethod, ProjectStore, PullRequest, PullRequestStatus, SavedProject};
 use crate::repository::{MergeOutcome, Repository};
 use markdown_editor::MarkdownDraft;
 use new_pull_request::NewPullRequestForm;
@@ -192,7 +192,7 @@ impl Dialectic {
         let (Some(repository), Some(detail)) = (&self.repository, &self.pull_request_detail) else { return };
         let pull_request_id = detail.pull_request.id;
         self.error_message = None;
-        match repository.merge_pull_request(pull_request_id) {
+        match repository.merge_pull_request(pull_request_id, MergeMethod::MergeCommit) {
             Ok(MergeOutcome::Merged) => self.reload_shown_pull_request(),
             Ok(MergeOutcome::Conflicts(conflicted_files)) => {
                 if let Some(detail) = &mut self.pull_request_detail {

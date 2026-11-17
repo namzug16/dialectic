@@ -106,6 +106,28 @@ pub fn diff_since_merge_base(working_dir: &Path, base: &str, head: &str) -> Resu
     run_git(working_dir, &["diff", "--no-color", "--no-ext-diff", "-M", &format!("{base}...{head}"), "--"])
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangedFile {
+    pub path: String,
+    /// `None` for binary files, which git doesn't count in lines.
+    pub additions: Option<u32>,
+    pub deletions: Option<u32>,
+}
+
+/// Per-file line counts of the same three-dot diff.
+pub fn changed_files_since_merge_base(working_dir: &Path, base: &str, head: &str) -> Result<Vec<ChangedFile>> {
+    let output = run_git(working_dir, &["diff", "--numstat", "--no-renames", &format!("{base}...{head}"), "--"])?;
+    Ok(output
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.splitn(3, '\t');
+            let additions = fields.next()?.parse().ok();
+            let deletions = fields.next()?.parse().ok();
+            Some(ChangedFile { path: fields.next()?.to_owned(), additions, deletions })
+        })
+        .collect())
+}
+
 /// Each worktree's path and the branch it has checked out (`None` when detached).
 pub fn worktrees(working_dir: &Path) -> Result<Vec<(PathBuf, Option<String>)>> {
     let output = run_git(working_dir, &["worktree", "list", "--porcelain"])?;

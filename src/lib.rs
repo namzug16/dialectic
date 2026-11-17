@@ -1,6 +1,7 @@
 //! Dialectic's core: pull requests stored in SQLite, branches read and merged with the `git` CLI.
 //! The GUI (`src/ui`) and the terminal CLI both go through this crate, so they share every rule.
 
+pub mod cli;
 pub mod db;
 pub mod git;
 pub mod repository;

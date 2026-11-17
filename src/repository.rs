@@ -1,7 +1,7 @@
 //! One opened repository: its pull requests and the rules for creating, editing and finishing them.
 
 use crate::db::{NewPullRequest, PullRequest, PullRequestStatus, PullRequestStore};
-use crate::git::{self, CommitSummary};
+use crate::git::{self, ChangedFile, CommitSummary};
 use crate::{Error, Result};
 use std::path::{Path, PathBuf};
 
@@ -106,6 +106,11 @@ impl Repository {
     pub fn diff(&self, pull_request: &PullRequest) -> Result<String> {
         let (base, head) = Self::compared_revisions(pull_request);
         git::diff_since_merge_base(&self.top_level_path, &base, &head)
+    }
+
+    pub fn changed_files(&self, pull_request: &PullRequest) -> Result<Vec<ChangedFile>> {
+        let (base, head) = Self::compared_revisions(pull_request);
+        git::changed_files_since_merge_base(&self.top_level_path, &base, &head)
     }
 
     /// Runs a standard `git merge --no-ff` of the source branch into the target branch. It merges in the

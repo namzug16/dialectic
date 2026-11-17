@@ -2,6 +2,8 @@
 //! The GUI (`src/ui`) and the terminal CLI both go through this crate, so they share every rule.
 
 pub mod db;
+pub mod git;
+pub mod repository;
 
 use std::fmt;
 

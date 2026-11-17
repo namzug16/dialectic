@@ -2,7 +2,7 @@
 
 mod common;
 
-use dialectic::db::{MergeMethod, PullRequestStatus};
+use dialectic::db::PullRequestStatus;
 use dialectic::ui::{Dialectic, Screen, view};
 use rune::{Env, Runtime, TextEdit};
 
@@ -65,14 +65,15 @@ fn open_review_and_merge_a_pull_request_then_hit_a_conflict() {
     });
     settle(&mut runtime);
     press(&mut runtime, "create-button");
-    press(&mut runtime, "merge-method/segment1");
-    assert_eq!(runtime.state.merge_method, MergeMethod::Rebase);
-    press(&mut runtime, "merge-button");
     let detail = runtime.state.pull_request_detail.as_ref().unwrap();
-    assert_eq!(detail.merge_conflicts, vec!["app.txt".to_owned()]);
-    assert_eq!(detail.pull_request.status, PullRequestStatus::Open);
-    assert!(runtime.find("conflicted-files").is_some(), "the merge box lists the files");
+    assert_eq!(detail.merge_conflicts, vec!["app.txt".to_owned()], "predicted before anyone merges");
+    assert!(runtime.find("conflict-banner").is_some() && runtime.find("conflicted-files").is_some());
+    assert!(runtime.find("agent-prompt").is_some(), "suggests asking the owner or a coding agent");
+    assert!(runtime.find("merge-button").is_none() && runtime.find("merge-method").is_none(), "merging is blocked");
+    press(&mut runtime, "detail-tab-2");
+    assert_eq!(runtime.state.pull_request_diff.files()[0].path(), "app.txt", "conflicting files come first");
 
+    press(&mut runtime, "detail-tab-0");
     press(&mut runtime, "close-button");
     assert_eq!(runtime.state.pull_request_detail.as_ref().unwrap().pull_request.status, PullRequestStatus::Closed);
 

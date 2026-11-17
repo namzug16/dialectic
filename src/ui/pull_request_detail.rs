@@ -1,6 +1,6 @@
 //! One pull request: GitHub's header and its Overview, Commits and Files changed tabs.
 
-use super::{Dialectic, branch_flow, error_banner, markdown_editor, status_badge, tab_strip};
+use super::{Dialectic, branch_flow, error_banner, markdown_editor, status_badge, tab_strip, warning_mark};
 use crate::db::{MergeMethod, PullRequest, PullRequestStatus};
 use crate::git::CommitSummary;
 use rune::{El, Tx, col, row, text};
@@ -15,7 +15,8 @@ pub struct PullRequestDetail {
     pub pull_request: PullRequest,
     pub commits: Vec<CommitSummary>,
     pub selected_tab: usize,
-    /// Files the last merge attempt reported as conflicting (that merge was aborted).
+    /// Files that conflict between the branches: predicted when the pull request loads, or reported by a
+    /// merge attempt (which git aborted). Any at all hides the merge buttons.
     pub merge_conflicts: Vec<String>,
     /// The title and description are in `Dialectic::draft`, being edited.
     pub is_editing: bool,
@@ -30,7 +31,11 @@ pub fn view(app: &Dialectic, detail: &PullRequestDetail, k: &Kit) -> El {
         &[
             "Overview".to_owned(),
             format!("Commits {}", detail.commits.len()),
-            format!("Files changed {changed_file_count}"),
+            if detail.merge_conflicts.is_empty() {
+                format!("Files changed {changed_file_count}")
+            } else {
+                format!("Files changed {changed_file_count} · {} conflicting", detail.merge_conflicts.len())
+            },
         ]
         .iter()
         .map(String::as_str)
@@ -72,6 +77,9 @@ pub fn view(app: &Dialectic, detail: &PullRequestDetail, k: &Kit) -> El {
                 .child(text(activity_sentence(pull_request, detail.commits.len())).font(k.ty.ui).color(k.c.text_muted))
                 .child(branch_flow(&pull_request.source_branch, &pull_request.target_branch, k)),
         );
+    if !detail.merge_conflicts.is_empty() {
+        summary = summary.child(conflict_banner(pull_request, detail.merge_conflicts.len(), k));
+    }
     if let Some(banner) = error_banner(app, k) {
         summary = summary.child(banner);
     }
@@ -87,11 +95,35 @@ pub fn view(app: &Dialectic, detail: &PullRequestDetail, k: &Kit) -> El {
         .child(col().w_full().max_w(1012.0).child(tabs));
 
     let tab_body = match detail.selected_tab {
-        FILES_CHANGED_TAB => files_changed(app, k),
+        FILES_CHANGED_TAB => files_changed(app, &detail.merge_conflicts, k),
         COMMITS_TAB => scrolling_column(commit_list(&detail.commits, k)),
         _ => scrolling_column(overview(app, detail, k)),
     };
     col().w_full().grow(1.0).child(top).child(tab_body)
+}
+
+/// Shown on every tab while the branches conflict, so a reviewer can't miss it.
+fn conflict_banner(pull_request: &PullRequest, conflicted_file_count: usize, k: &Kit) -> El {
+    let files = if conflicted_file_count == 1 { "1 file".to_owned() } else { format!("{conflicted_file_count} files") };
+    row()
+        .key("conflict-banner")
+        .w_full()
+        .padding(12.0)
+        .gap(10.0)
+        .items_center()
+        .radius(k.radius.md)
+        .fill(k.c.danger.bg)
+        .border(1.0, k.c.danger.border)
+        .child(warning_mark(k))
+        .child(
+            text(format!(
+                "{} conflicts with {} in {files}. Merging is blocked until the conflicts are resolved.",
+                pull_request.source_branch, pull_request.target_branch
+            ))
+            .font(k.ty.ui_medium)
+            .color(k.c.danger.fg)
+            .wrap(),
+        )
 }
 
 fn title_font(k: &Kit) -> rune::tok::TextStyle {
@@ -200,25 +232,78 @@ fn merge_box(detail: &PullRequestDetail, chosen_merge_method: MergeMethod, k: &K
         PullRequestStatus::Closed => card("#cf222e")
             .child(heading(&format!("Closed without merging on {} UTC", merged_or_closed_at(pull_request)), k)),
         PullRequestStatus::Open if !detail.merge_conflicts.is_empty() => {
-            let mut conflicted_files = col().key("conflicted-files").gap(4.0);
+            let (source_branch, target_branch) = (&pull_request.source_branch, &pull_request.target_branch);
+            let mut conflicted_files = col().key("conflicted-files").gap(6.0);
             for conflicted_file in &detail.merge_conflicts {
-                conflicted_files =
-                    conflicted_files.child(text(format!("• {conflicted_file}")).font(k.ty.mono).color(k.c.text_base));
+                conflicted_files = conflicted_files.child(
+                    row()
+                        .gap(8.0)
+                        .items_center()
+                        .child(warning_mark(k))
+                        .child(text(conflicted_file.clone()).font(k.ty.mono).color(k.c.danger.fg)),
+                );
             }
+            let agent_prompt = format!(
+                "On the branch {source_branch}, merge {target_branch} and resolve the conflicts in {}. \
+                 Keep what both sides intended, run the tests, then commit the merge.",
+                detail.merge_conflicts.join(", ")
+            );
             card("#cf222e")
-                .child(heading("This branch has conflicts that must be resolved", k))
+                .child(
+                    row()
+                        .gap(8.0)
+                        .items_center()
+                        .child(warning_mark(k))
+                        .child(heading("Merging is blocked: this branch has conflicts", k)),
+                )
                 .child(
                     text(format!(
-                        "Git reported conflicts in these files, so it stopped and {} is unchanged. \
-                         Resolve them on {} (for example, merge or rebase {} into it), then try again.",
-                        pull_request.target_branch, pull_request.source_branch, pull_request.target_branch
+                        "{source_branch} and {target_branch} both changed the same lines in these files, \
+                         so git can't combine them on its own:"
                     ))
                     .font(k.ty.ui)
                     .color(k.c.text_muted)
                     .wrap(),
                 )
                 .child(conflicted_files)
-                .child(merge_buttons(chosen_merge_method, k))
+                .child(
+                    col()
+                        .key("conflict-next-steps")
+                        .w_full()
+                        .padding(12.0)
+                        .gap(8.0)
+                        .radius(k.radius.md)
+                        .fill(k.c.warning.bg)
+                        .border(1.0, k.c.warning.border)
+                        .child(text("What to do").font(k.ty.ui_medium).color(k.c.warning.fg))
+                        .child(
+                            text(format!(
+                                "Contact {}, who owns {source_branch}, and ask them to fix the conflicts on their \
+                                 branch. Open this pull request again once they have committed the fix.",
+                                pull_request.author
+                            ))
+                            .font(k.ty.ui)
+                            .color(k.c.text_base)
+                            .wrap(),
+                        )
+                        .child(
+                            text("If you think a coding agent can fix them, ask one to with this prompt:")
+                                .font(k.ty.ui)
+                                .color(k.c.text_base)
+                                .wrap(),
+                        )
+                        .child(
+                            col()
+                                .key("agent-prompt")
+                                .w_full()
+                                .padding(8.0)
+                                .radius(k.radius.sm)
+                                .fill(k.c.layer_01)
+                                .border(1.0, k.c.border_weak)
+                                .child(text(agent_prompt).font(k.ty.mono).color(k.c.text_base).wrap().selectable(true)),
+                        ),
+                )
+                .child(row().child(close_button(k)))
         }
         PullRequestStatus::Open => card("#1f883d")
             .child(heading("Ready to merge", k))
@@ -272,13 +357,7 @@ fn merge_buttons(chosen_merge_method: MergeMethod, k: &Kit) -> El {
                 .build(k)
                 .key("merge-button"),
         )
-        .child(
-            Button::new("Close pull request")
-                .variant(ButtonVariant::Outline)
-                .on_press(|app: &mut Dialectic| app.close_shown_pull_request())
-                .build(k)
-                .key("close-button"),
-        );
+        .child(close_button(k));
     col()
         .gap(12.0)
         .child(
@@ -289,6 +368,14 @@ fn merge_buttons(chosen_merge_method: MergeMethod, k: &Kit) -> El {
                 .child(method_picker),
         )
         .child(buttons)
+}
+
+fn close_button(k: &Kit) -> El {
+    Button::new("Close pull request")
+        .variant(ButtonVariant::Outline)
+        .on_press(|app: &mut Dialectic| app.close_shown_pull_request())
+        .build(k)
+        .key("close-button")
 }
 
 fn heading(heading_text: &str, k: &Kit) -> El {
@@ -332,7 +419,9 @@ fn commit_list(commits: &[CommitSummary], k: &Kit) -> El {
     list
 }
 
-fn files_changed(app: &Dialectic, k: &Kit) -> El {
+/// GitHub's Files changed: a file list beside the diff; `conflicted_files` are flagged in red (and come
+/// first, as `diff_state` sorted them).
+fn files_changed(app: &Dialectic, conflicted_files: &[String], k: &Kit) -> El {
     let diff = &app.pull_request_diff;
     let (total_additions, total_deletions) = diff
         .files()
@@ -365,22 +454,30 @@ fn files_changed(app: &Dialectic, k: &Kit) -> El {
 
     let mut file_list = col().key("changed-files").w_full().gap(2.0).padding(8.0);
     for (file_index, file) in diff.files().iter().enumerate() {
+        let is_conflicted = conflicted_files.iter().any(|conflicted_file| conflicted_file == file.path());
+        let mut file_row = row()
+            .key(format!("changed-file-{file_index}"))
+            .role("button")
+            .label(if is_conflicted {
+                format!("Show {} (conflicting)", file.path())
+            } else {
+                format!("Show {}", file.path())
+            })
+            .w_full()
+            .px(8.0)
+            .py(6.0)
+            .gap(8.0)
+            .items_center()
+            .radius(k.radius.sm)
+            .hover(k.c.hover)
+            .on_press_tx(move |app: &mut Dialectic, tx: &mut Tx| app.pull_request_diff.scroll_to_file(file_index, tx));
+        if is_conflicted {
+            file_row = file_row.fill(k.c.danger.bg).border(1.0, k.c.danger.border).child(warning_mark(k));
+        }
+        let path_colour = if is_conflicted { k.c.danger.fg } else { k.c.text_base };
         file_list = file_list.child(
-            row()
-                .key(format!("changed-file-{file_index}"))
-                .role("button")
-                .label(format!("Show {}", file.path()))
-                .w_full()
-                .px(8.0)
-                .py(6.0)
-                .gap(8.0)
-                .items_center()
-                .radius(k.radius.sm)
-                .hover(k.c.hover)
-                .on_press_tx(move |app: &mut Dialectic, tx: &mut Tx| {
-                    app.pull_request_diff.scroll_to_file(file_index, tx)
-                })
-                .child(text(file.path().to_owned()).font(k.ty.ui).color(k.c.text_base).grow(1.0).wrap_anywhere())
+            file_row
+                .child(text(file.path().to_owned()).font(k.ty.ui).color(path_colour).grow(1.0).wrap_anywhere())
                 .child(text(format!("+{}", file.additions())).font(k.ty.caption()).color(k.c.success.fg))
                 .child(text(format!("−{}", file.deletions())).font(k.ty.caption()).color(k.c.danger.fg)),
         );
@@ -392,6 +489,15 @@ fn files_changed(app: &Dialectic, k: &Kit) -> El {
         col().grow(1.0).h_full().child(
             DiffView::new(|app: &Dialectic| &app.pull_request_diff, |app: &mut Dialectic| &mut app.pull_request_diff)
                 .key("diff-view")
+                .header_actions({
+                    let (conflicted_files, k) = (conflicted_files.to_vec(), k.clone());
+                    move |app: &Dialectic, file_index| {
+                        let is_conflicted = app.pull_request_diff.files().get(file_index).is_some_and(|file| {
+                            conflicted_files.iter().any(|conflicted_file| conflicted_file == file.path())
+                        });
+                        if is_conflicted { conflict_chip(&k) } else { col() }
+                    }
+                })
                 .build(app, k),
         )
     };
@@ -413,9 +519,25 @@ fn files_changed(app: &Dialectic, k: &Kit) -> El {
     )
 }
 
-/// A diff parsed from `git diff` text, laid out as the user last chose.
-pub fn diff_state(diff_text: &str, diff_mode: DiffMode) -> DiffState {
-    let mut diff = DiffState::new(rune_kit::diff::parse(diff_text));
+/// The red "Conflict" tag on a conflicting file's diff header.
+fn conflict_chip(k: &Kit) -> El {
+    row()
+        .key("conflict-chip")
+        .px(8.0)
+        .py(2.0)
+        .gap(6.0)
+        .items_center()
+        .radius(999.0)
+        .fill(k.c.danger.bg)
+        .border(1.0, k.c.danger.border)
+        .child(text("Conflict").font(k.ty.caption()).color(k.c.danger.fg))
+}
+
+/// A diff parsed from `git diff` text, conflicting files first, laid out as the user last chose.
+pub fn diff_state(diff_text: &str, diff_mode: DiffMode, conflicted_files: &[String]) -> DiffState {
+    let mut files = rune_kit::diff::parse(diff_text);
+    files.sort_by_key(|file| !conflicted_files.iter().any(|conflicted_file| conflicted_file == file.path()));
+    let mut diff = DiffState::new(files);
     diff.set_mode(diff_mode);
     diff
 }

@@ -178,15 +178,11 @@ impl Dialectic {
         let Some(repository) = &self.repository else { return Ok(()) };
         let pull_request = repository.pull_request(pull_request_id)?;
         let commits = repository.commits(&pull_request)?;
+        let merge_conflicts = repository.merge_conflicts(&pull_request)?;
         self.pull_request_diff =
-            pull_request_detail::diff_state(&repository.diff(&pull_request)?, self.saved_diff_mode());
-        self.pull_request_detail = Some(PullRequestDetail {
-            pull_request,
-            commits,
-            selected_tab,
-            merge_conflicts: Vec::new(),
-            is_editing: false,
-        });
+            pull_request_detail::diff_state(&repository.diff(&pull_request)?, self.saved_diff_mode(), &merge_conflicts);
+        self.pull_request_detail =
+            Some(PullRequestDetail { pull_request, commits, selected_tab, merge_conflicts, is_editing: false });
         Ok(())
     }
 
@@ -197,7 +193,17 @@ impl Dialectic {
         self.error_message = None;
         match repository.merge_pull_request(pull_request_id, self.merge_method) {
             Ok(MergeOutcome::Merged) => self.reload_shown_pull_request(),
+            // Conflicts the prediction missed (a rebase can conflict where a merge doesn't).
             Ok(MergeOutcome::Conflicts(conflicted_files)) => {
+                let diff_text =
+                    repository.pull_request(pull_request_id).and_then(|pull_request| repository.diff(&pull_request));
+                match diff_text {
+                    Ok(diff_text) => {
+                        self.pull_request_diff =
+                            pull_request_detail::diff_state(&diff_text, self.saved_diff_mode(), &conflicted_files)
+                    }
+                    Err(error) => self.error_message = Some(error.to_string()),
+                }
                 if let Some(detail) = &mut self.pull_request_detail {
                     detail.merge_conflicts = conflicted_files;
                 }
@@ -433,6 +439,17 @@ pub fn tab_strip(
     strip
 }
 
+/// A red circle with "!": the warning sign next to anything about conflicts.
+pub fn warning_mark(k: &Kit) -> El {
+    col()
+        .w(18.0)
+        .h(18.0)
+        .radius(999.0)
+        .center()
+        .fill(k.c.danger.fg)
+        .child(text("!").font(k.ty.ui_medium).color(k.c.white))
+}
+
 /// A one-line error in the danger colour, or nothing.
 pub fn error_banner(app: &Dialectic, k: &Kit) -> Option<El> {
     app.error_message.as_ref().map(|message| {
@@ -489,11 +506,9 @@ const SCENES: &[Scene] = &[
     ("pull-request-list", Dialectic::show_pull_request_list),
     ("pull-request-overview", |app| show_scene_pull_request(app, pull_request_detail::OVERVIEW_TAB)),
     ("pull-request-commits", |app| show_scene_pull_request(app, pull_request_detail::COMMITS_TAB)),
-    // Really runs the merge: point it at a pull request that conflicts (`--pull-request <id>`).
-    ("pull-request-conflicts", |app| {
-        show_scene_pull_request(app, pull_request_detail::OVERVIEW_TAB);
-        app.merge_shown_pull_request();
-    }),
+    // Point these at a pull request whose branches conflict (`--pull-request <id>`).
+    ("pull-request-conflicts", |app| show_scene_pull_request(app, pull_request_detail::OVERVIEW_TAB)),
+    ("pull-request-conflicts-files", |app| show_scene_pull_request(app, pull_request_detail::FILES_CHANGED_TAB)),
     ("pull-request-rebase", |app| {
         show_scene_pull_request(app, pull_request_detail::OVERVIEW_TAB);
         app.merge_method = MergeMethod::Rebase;

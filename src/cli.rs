@@ -22,6 +22,7 @@ pub fn is_cli_invocation(arguments: &[String]) -> bool {
 #[derive(Parser)]
 #[command(
     name = "dialectic",
+    bin_name = "dialectic",
     version,
     about = "Local Git pull requests between the branches of one repository",
     long_about = "Local Git pull requests between the branches of one repository.\n\n\

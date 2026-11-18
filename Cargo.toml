@@ -3,6 +3,7 @@ name = "dialectic"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+default-run = "dialectic"
 repository = "https://github.com/namzug16/dialectic"
 description = "Local Git pull requests: open, review and merge branches of one repository on one machine."
 

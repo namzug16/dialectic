@@ -1,5 +1,5 @@
-# Dialectic ships for Windows only. Pushing a `v*` tag builds dialectic.exe and publishes a
-# GitHub release; running the workflow by hand builds it and keeps it as a workflow artifact.
+# Dialectic ships for Windows only. Pushing a `v*` tag builds dialectic.exe and dialectic.com and
+# publishes a GitHub release; running the workflow by hand builds them and keeps them as an artifact.
 name: Release
 
 on:
@@ -27,7 +27,9 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory dist | Out-Null
-          Compress-Archive -Path target/release/dialectic.exe, LICENSE, README.md, CHANGELOG.md `
+          # Terminals pick dialectic.com over dialectic.exe, so the console build serves the CLI.
+          Copy-Item target/release/dialectic-console.exe target/release/dialectic.com
+          Compress-Archive -Path target/release/dialectic.exe, target/release/dialectic.com, LICENSE, README.md, CHANGELOG.md `
             -DestinationPath dist/dialectic-${{ github.ref_name }}-windows-x86_64.zip
 
       - uses: actions/upload-artifact@v4

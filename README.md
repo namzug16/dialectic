@@ -114,7 +114,10 @@ root `Cargo.toml` at the new revision.
 ## Windows
 
 Dialectic is released for Windows only. Pushing a `v*` tag runs `.github/workflows/release.yml`
-on a Windows runner, which builds `dialectic.exe` and attaches it, zipped, to a GitHub release.
+on a Windows runner, which builds `dialectic.exe` and `dialectic.com` and attaches them, zipped,
+to a GitHub release. Keep both in one folder on `PATH`: `dialectic.exe` is the app with no console
+window, and `dialectic.com` (the `dialectic-console` binary, renamed) is what `dialectic` resolves to
+in a terminal, so CLI commands wait and print there; plain `dialectic` in a terminal opens the app.
 Building it yourself on Windows needs:
 
 - the MSVC toolchain (Rune's README lists MSVC or MinGW binutils) and Rust 1.99.1

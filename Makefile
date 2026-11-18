@@ -52,7 +52,7 @@ screenshots: ## Render every screen headless into target/screenshots
 	@echo "Screenshots in $(SCREENSHOT_DIR)"
 
 install: ## Put dialectic on your PATH (cargo install), for you and your agents
-	cargo install --locked --path .
+	cargo install --locked --path . --bin dialectic
 
 clean: ## Remove build output, the demo repo and screenshots
 	cargo clean

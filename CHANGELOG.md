@@ -6,6 +6,11 @@ All notable changes to Dialectic are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The Windows app no longer opens a console window. The release also ships `dialectic.com`, which
+  terminals pick over `dialectic.exe`, so `dialectic pr …` still prints and waits in the terminal.
+
 ## [0.1.0] - 2026-11-18
 
 First release, built for Windows.

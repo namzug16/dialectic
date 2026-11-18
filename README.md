@@ -114,10 +114,18 @@ root `Cargo.toml` at the new revision.
 ## Windows
 
 Dialectic is released for Windows only. Pushing a `v*` tag runs `.github/workflows/release.yml`
-on a Windows runner, which builds `dialectic.exe` and `dialectic.com` and attaches them, zipped,
-to a GitHub release. Keep both in one folder on `PATH`: `dialectic.exe` is the app with no console
-window, and `dialectic.com` (the `dialectic-console` binary, renamed) is what `dialectic` resolves to
-in a terminal, so CLI commands wait and print there; plain `dialectic` in a terminal opens the app.
+on a Windows runner, which attaches two downloads to a GitHub release:
+
+- `dialectic-<version>-windows-x86_64-setup.exe`, the installer (`installer/dialectic.iss`, built
+  with Inno Setup). It installs per user to `%LOCALAPPDATA%\Programs\Dialectic` without admin
+  rights, adds that folder to `PATH`, creates a Start menu shortcut and an uninstaller, and
+  upgrades in place when a newer one runs. It is unsigned, so SmartScreen asks first: "More info",
+  then "Run anyway".
+- a portable zip with the same two programs, to put in one folder on `PATH` yourself.
+
+`dialectic.exe` is the app, with no console window. `dialectic.com` (the `dialectic-console`
+binary, renamed) is what `dialectic` resolves to in a terminal, so CLI commands wait and print
+there; plain `dialectic` in a terminal opens the app.
 Building it yourself on Windows needs:
 
 - the MSVC toolchain (Rune's README lists MSVC or MinGW binutils) and Rust 1.99.1

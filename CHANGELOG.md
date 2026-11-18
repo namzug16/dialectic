@@ -6,6 +6,11 @@ All notable changes to Dialectic are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Windows installer: installs per user without admin rights, adds Dialectic to `PATH`, creates a
+  Start menu shortcut and an uninstaller, and upgrades in place.
+
 ## [0.1.1] - 2026-11-18
 
 ### Changed

@@ -1,4 +1,4 @@
-# Dialectic ships for Windows only. Pushing a `v*` tag builds dialectic.exe and dialectic.com and
+# Dialectic ships for Windows only. Pushing a `v*` tag builds an installer and a portable zip and
 # publishes a GitHub release; running the workflow by hand builds them and keeps them as an artifact.
 name: Release
 
@@ -32,14 +32,22 @@ jobs:
           Compress-Archive -Path target/release/dialectic.exe, target/release/dialectic.com, LICENSE, README.md, CHANGELOG.md `
             -DestinationPath dist/dialectic-${{ github.ref_name }}-windows-x86_64.zip
 
+      - name: Build installer
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" installer\dialectic.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - uses: actions/upload-artifact@v4
         with:
           name: dialectic-windows-x86_64
-          path: dist/*.zip
+          path: dist/*
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" dist/*.zip --title "${{ github.ref_name }}" --notes "See CHANGELOG.md."
+        run: gh release create "${{ github.ref_name }}" dist/* --title "${{ github.ref_name }}" --notes "See CHANGELOG.md."

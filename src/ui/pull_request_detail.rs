@@ -1,6 +1,6 @@
 //! One pull request: GitHub's header and its Overview, Commits and Files changed tabs.
 
-use super::{Dialectic, branch_flow, error_banner, markdown_editor, status_badge, tab_strip, warning_mark};
+use super::{Dialectic, Strings, branch_flow, error_banner, markdown_editor, status_badge, tab_strip, warning_mark};
 use crate::db::{MergeMethod, PullRequest, PullRequestStatus};
 use crate::git::CommitSummary;
 use rune::{El, Tx, col, row, text};
@@ -24,18 +24,15 @@ pub struct PullRequestDetail {
 
 pub fn view(app: &Dialectic, detail: &PullRequestDetail, k: &Kit) -> El {
     let pull_request = &detail.pull_request;
+    let s = app.strings();
     let changed_file_count = app.pull_request_diff.files().len();
     let tabs = tab_strip(
         k,
         "detail-tab",
         &[
-            "Overview".to_owned(),
-            format!("Commits {}", detail.commits.len()),
-            if detail.merge_conflicts.is_empty() {
-                format!("Files changed {changed_file_count}")
-            } else {
-                format!("Files changed {changed_file_count} · {} conflicting", detail.merge_conflicts.len())
-            },
+            s.overview_tab.to_owned(),
+            (s.commits_tab)(detail.commits.len()),
+            (s.files_changed_tab)(changed_file_count, detail.merge_conflicts.len()),
         ]
         .iter()
         .map(String::as_str)
@@ -60,7 +57,7 @@ pub fn view(app: &Dialectic, detail: &PullRequestDetail, k: &Kit) -> El {
                 .child(text(pull_request.title.clone()).font(title_font(k)).color(k.c.text_strong))
                 .child(text(format!("#{}", pull_request.id)).font(title_font(k)).color(k.c.text_faint).grow(1.0))
                 .child(if pull_request.status == PullRequestStatus::Open && !detail.is_editing {
-                    Button::new("Edit")
+                    Button::new(s.edit)
                         .variant(ButtonVariant::Outline)
                         .on_press(|app: &mut Dialectic| app.start_editing_shown_pull_request())
                         .build(k)
@@ -73,12 +70,16 @@ pub fn view(app: &Dialectic, detail: &PullRequestDetail, k: &Kit) -> El {
             row()
                 .gap(8.0)
                 .items_center()
-                .child(status_badge(pull_request.status, k))
-                .child(text(activity_sentence(pull_request, detail.commits.len())).font(k.ty.ui).color(k.c.text_muted))
+                .child(status_badge(pull_request.status, s, k))
+                .child(
+                    text((s.activity_sentence)(pull_request.status, &pull_request.author, detail.commits.len()))
+                        .font(k.ty.ui)
+                        .color(k.c.text_muted),
+                )
                 .child(branch_flow(&pull_request.source_branch, &pull_request.target_branch, k)),
         );
     if !detail.merge_conflicts.is_empty() {
-        summary = summary.child(conflict_banner(pull_request, detail.merge_conflicts.len(), k));
+        summary = summary.child(conflict_banner(pull_request, detail.merge_conflicts.len(), s, k));
     }
     if let Some(banner) = error_banner(app, k) {
         summary = summary.child(banner);
@@ -100,17 +101,17 @@ pub fn view(app: &Dialectic, detail: &PullRequestDetail, k: &Kit) -> El {
             |app: &Dialectic| &app.pull_request_diff,
             |app: &mut Dialectic| &mut app.pull_request_diff,
             &detail.merge_conflicts,
+            s,
             k,
         ),
-        COMMITS_TAB => scrolling_column(commit_list(&detail.commits, k)),
+        COMMITS_TAB => scrolling_column(commit_list(&detail.commits, s, k)),
         _ => scrolling_column(overview(app, detail, k)),
     };
     col().w_full().grow(1.0).child(top).child(tab_body)
 }
 
 /// Shown on every tab while the branches conflict, so a reviewer can't miss it.
-fn conflict_banner(pull_request: &PullRequest, conflicted_file_count: usize, k: &Kit) -> El {
-    let files = if conflicted_file_count == 1 { "1 file".to_owned() } else { format!("{conflicted_file_count} files") };
+fn conflict_banner(pull_request: &PullRequest, conflicted_file_count: usize, s: &Strings, k: &Kit) -> El {
     row()
         .key("conflict-banner")
         .w_full()
@@ -122,29 +123,15 @@ fn conflict_banner(pull_request: &PullRequest, conflicted_file_count: usize, k: 
         .border(1.0, k.c.danger.border)
         .child(warning_mark(k))
         .child(
-            text(format!(
-                "{} conflicts with {} in {files}. Merging is blocked until the conflicts are resolved.",
-                pull_request.source_branch, pull_request.target_branch
-            ))
-            .font(k.ty.ui_medium)
-            .color(k.c.danger.fg)
-            .wrap(),
+            text((s.conflict_banner)(&pull_request.source_branch, &pull_request.target_branch, conflicted_file_count))
+                .font(k.ty.ui_medium)
+                .color(k.c.danger.fg)
+                .wrap(),
         )
 }
 
 fn title_font(k: &Kit) -> rune::tok::TextStyle {
     rune::tok::TextStyle { size: 26.0, ..k.ty.body }.lh(34.0)
-}
-
-/// "Linus wants to merge 2 commits:", followed by the `source → target` chips.
-fn activity_sentence(pull_request: &PullRequest, commit_count: usize) -> String {
-    let commits = if commit_count == 1 { "1 commit".to_owned() } else { format!("{commit_count} commits") };
-    // Only the author is recorded, so a merged pull request doesn't name who merged it.
-    match pull_request.status {
-        PullRequestStatus::Open => format!("{} wants to merge {commits}:", pull_request.author),
-        PullRequestStatus::Merged => format!("{commits} by {} merged:", pull_request.author),
-        PullRequestStatus::Closed => format!("{commits} by {}, closed without merging:", pull_request.author),
-    }
 }
 
 /// A tab body that scrolls inside the window, centred at GitHub's width.
@@ -159,20 +146,21 @@ fn scrolling_column(content: El) -> El {
 
 fn overview(app: &Dialectic, detail: &PullRequestDetail, k: &Kit) -> El {
     let pull_request = &detail.pull_request;
+    let s = app.strings();
     if detail.is_editing {
         let edit_actions = row()
             .w_full()
             .gap(8.0)
             .justify_end()
             .child(
-                Button::new("Cancel")
+                Button::new(s.cancel)
                     .variant(ButtonVariant::Ghost)
                     .on_press(|app: &mut Dialectic| app.cancel_editing_shown_pull_request())
                     .build(k)
                     .key("cancel-edit-button"),
             )
             .child(
-                Button::new("Save")
+                Button::new(s.save)
                     .variant(ButtonVariant::Submit)
                     .on_press(|app: &mut Dialectic| app.save_shown_pull_request_edit())
                     .build(k)
@@ -182,11 +170,11 @@ fn overview(app: &Dialectic, detail: &PullRequestDetail, k: &Kit) -> El {
             .key("edit-form")
             .w_full()
             .gap(12.0)
-            .child(markdown_editor::view(&app.draft, k))
+            .child(markdown_editor::view(&app.draft, s, k))
             .child(edit_actions);
     }
     let description = if pull_request.description.trim().is_empty() {
-        text("No description provided.").font(k.ty.ui).color(k.c.text_faint)
+        text(s.no_description).font(k.ty.ui).color(k.c.text_faint)
     } else {
         markdown_editor::rendered_markdown(&pull_request.description, k)
     };
@@ -203,18 +191,14 @@ fn overview(app: &Dialectic, detail: &PullRequestDetail, k: &Kit) -> El {
                 .fill(k.c.layer_01)
                 .border_sides([0.0, 0.0, 1.0, 0.0], k.c.border_weak)
                 .child(text(pull_request.author.clone()).font(k.ty.ui_medium).color(k.c.text_base))
-                .child(
-                    text(format!(" opened this on {} UTC", pull_request.created_at))
-                        .font(k.ty.ui)
-                        .color(k.c.text_muted),
-                ),
+                .child(text((s.opened_this_on)(&pull_request.created_at)).font(k.ty.ui).color(k.c.text_muted)),
         )
         .child(col().w_full().padding(16.0).child(description));
-    col().w_full().gap(16.0).child(description_card).child(merge_box(detail, app.merge_method, k))
+    col().w_full().gap(16.0).child(description_card).child(merge_box(detail, app.merge_method, s, k))
 }
 
 /// GitHub's merge box: the merge button while open, the outcome after.
-fn merge_box(detail: &PullRequestDetail, chosen_merge_method: MergeMethod, k: &Kit) -> El {
+fn merge_box(detail: &PullRequestDetail, chosen_merge_method: MergeMethod, s: &Strings, k: &Kit) -> El {
     let pull_request = &detail.pull_request;
     let card = |accent: &str| {
         col()
@@ -227,16 +211,17 @@ fn merge_box(detail: &PullRequestDetail, chosen_merge_method: MergeMethod, k: &K
             .border_sides([0.0, 0.0, 0.0, 4.0], rune::color::hex(accent).unwrap_or(k.c.border_strong))
     };
     match pull_request.status {
-        PullRequestStatus::Merged => {
-            let how =
-                if pull_request.merge_method == Some(MergeMethod::Rebase) { "Rebased and merged" } else { "Merged" };
-            card("#8250df").child(heading(
-                &format!("{how} into {} on {} UTC", pull_request.target_branch, merged_or_closed_at(pull_request)),
-                k,
-            ))
+        PullRequestStatus::Merged => card("#8250df").child(heading(
+            &(s.merged_into_on)(
+                pull_request.merge_method,
+                &pull_request.target_branch,
+                merged_or_closed_at(pull_request, s),
+            ),
+            k,
+        )),
+        PullRequestStatus::Closed => {
+            card("#cf222e").child(heading(&(s.closed_without_merging_on)(merged_or_closed_at(pull_request, s)), k))
         }
-        PullRequestStatus::Closed => card("#cf222e")
-            .child(heading(&format!("Closed without merging on {} UTC", merged_or_closed_at(pull_request)), k)),
         PullRequestStatus::Open if !detail.merge_conflicts.is_empty() => {
             let (source_branch, target_branch) = (&pull_request.source_branch, &pull_request.target_branch);
             let mut conflicted_files = col().key("conflicted-files").gap(6.0);
@@ -249,27 +234,14 @@ fn merge_box(detail: &PullRequestDetail, chosen_merge_method: MergeMethod, k: &K
                         .child(text(conflicted_file.clone()).font(k.ty.mono).color(k.c.danger.fg)),
                 );
             }
-            let agent_prompt = format!(
-                "On the branch {source_branch}, merge {target_branch} and resolve the conflicts in {}. \
-                 Keep what both sides intended, run the tests, then commit the merge.",
-                detail.merge_conflicts.join(", ")
-            );
+            let agent_prompt = (s.agent_prompt)(source_branch, target_branch, &detail.merge_conflicts.join(", "));
             card("#cf222e")
+                .child(row().gap(8.0).items_center().child(warning_mark(k)).child(heading(s.merging_blocked, k)))
                 .child(
-                    row()
-                        .gap(8.0)
-                        .items_center()
-                        .child(warning_mark(k))
-                        .child(heading("Merging is blocked: this branch has conflicts", k)),
-                )
-                .child(
-                    text(format!(
-                        "{source_branch} and {target_branch} both changed the same lines in these files, \
-                         so git can't combine them on its own:"
-                    ))
-                    .font(k.ty.ui)
-                    .color(k.c.text_muted)
-                    .wrap(),
+                    text((s.conflicts_explanation)(source_branch, target_branch))
+                        .font(k.ty.ui)
+                        .color(k.c.text_muted)
+                        .wrap(),
                 )
                 .child(conflicted_files)
                 .child(
@@ -281,23 +253,14 @@ fn merge_box(detail: &PullRequestDetail, chosen_merge_method: MergeMethod, k: &K
                         .radius(k.radius.md)
                         .fill(k.c.warning.bg)
                         .border(1.0, k.c.warning.border)
-                        .child(text("What to do").font(k.ty.ui_medium).color(k.c.warning.fg))
+                        .child(text(s.what_to_do).font(k.ty.ui_medium).color(k.c.warning.fg))
                         .child(
-                            text(format!(
-                                "Contact {}, who owns {source_branch}, and ask them to fix the conflicts on their \
-                                 branch. Open this pull request again once they have committed the fix.",
-                                pull_request.author
-                            ))
-                            .font(k.ty.ui)
-                            .color(k.c.text_base)
-                            .wrap(),
-                        )
-                        .child(
-                            text("If you think a coding agent can fix them, ask one to with this prompt:")
+                            text((s.contact_branch_owner)(&pull_request.author, source_branch))
                                 .font(k.ty.ui)
                                 .color(k.c.text_base)
                                 .wrap(),
                         )
+                        .child(text(s.agent_prompt_intro).font(k.ty.ui).color(k.c.text_base).wrap())
                         .child(
                             col()
                                 .key("agent-prompt")
@@ -309,44 +272,32 @@ fn merge_box(detail: &PullRequestDetail, chosen_merge_method: MergeMethod, k: &K
                                 .child(text(agent_prompt).font(k.ty.mono).color(k.c.text_base).wrap().selectable(true)),
                         ),
                 )
-                .child(row().child(close_button(k)))
+                .child(row().child(close_button(s, k)))
         }
         PullRequestStatus::Open => card("#1f883d")
-            .child(heading("Ready to merge", k))
+            .child(heading(s.ready_to_merge, k))
             .child(
-                text(format!(
-                    "{} If git reports conflicts, nothing changes and the files are listed here.",
-                    merge_method_explanation(chosen_merge_method, pull_request)
+                text((s.merge_explanation)(
+                    chosen_merge_method,
+                    &pull_request.source_branch,
+                    &pull_request.target_branch,
                 ))
                 .font(k.ty.ui)
                 .color(k.c.text_muted)
                 .wrap(),
             )
-            .child(merge_buttons(chosen_merge_method, k)),
-    }
-}
-
-fn merge_method_explanation(merge_method: MergeMethod, pull_request: &PullRequest) -> String {
-    let (source_branch, target_branch) = (&pull_request.source_branch, &pull_request.target_branch);
-    match merge_method {
-        MergeMethod::MergeCommit => {
-            format!("Runs git merge --no-ff {source_branch} into {target_branch}: its commits plus a merge commit.")
-        }
-        MergeMethod::Rebase => format!(
-            "Replays {source_branch}'s commits on top of {target_branch} and fast-forwards {target_branch}: \
-             a linear history with no merge commit. {source_branch} itself is left as it is."
-        ),
+            .child(merge_buttons(chosen_merge_method, s, k)),
     }
 }
 
 /// The merge method picker over GitHub's merge button (labelled for the chosen method) and Close.
-fn merge_buttons(chosen_merge_method: MergeMethod, k: &Kit) -> El {
+fn merge_buttons(chosen_merge_method: MergeMethod, s: &Strings, k: &Kit) -> El {
     let (merge_label, chosen_index) = match chosen_merge_method {
-        MergeMethod::MergeCommit => ("Merge pull request", 0),
-        MergeMethod::Rebase => ("Rebase and merge", 1),
+        MergeMethod::MergeCommit => (s.merge_pull_request, 0),
+        MergeMethod::Rebase => (s.rebase_and_merge, 1),
     };
-    let method_picker = SegmentedControl::new(&["Create a merge commit", "Rebase and merge"], Some(chosen_index))
-        .label("Merge method")
+    let method_picker = SegmentedControl::new(&[s.create_a_merge_commit, s.rebase_and_merge], Some(chosen_index))
+        .label(s.merge_method)
         .fit()
         .on_pick(|app: &mut Dialectic, picked_method, _: &mut Tx| {
             app.merge_method = if picked_method == 1 { MergeMethod::Rebase } else { MergeMethod::MergeCommit };
@@ -363,21 +314,21 @@ fn merge_buttons(chosen_merge_method: MergeMethod, k: &Kit) -> El {
                 .build(k)
                 .key("merge-button"),
         )
-        .child(close_button(k));
+        .child(close_button(s, k));
     col()
         .gap(12.0)
         .child(
             row()
                 .gap(12.0)
                 .items_center()
-                .child(text("Merge method").font(k.ty.ui_medium).color(k.c.text_base))
+                .child(text(s.merge_method).font(k.ty.ui_medium).color(k.c.text_base))
                 .child(method_picker),
         )
         .child(buttons)
 }
 
-fn close_button(k: &Kit) -> El {
-    Button::new("Close pull request")
+fn close_button(s: &Strings, k: &Kit) -> El {
+    Button::new(s.close_pull_request)
         .variant(ButtonVariant::Outline)
         .on_press(|app: &mut Dialectic| app.close_shown_pull_request())
         .build(k)
@@ -388,14 +339,14 @@ fn heading(heading_text: &str, k: &Kit) -> El {
     text(heading_text.to_owned()).font(k.ty.body_medium).color(k.c.text_strong)
 }
 
-fn merged_or_closed_at(pull_request: &PullRequest) -> &str {
-    pull_request.merged_or_closed_at.as_deref().unwrap_or("an unknown date")
+fn merged_or_closed_at<'a>(pull_request: &'a PullRequest, s: &'a Strings) -> &'a str {
+    pull_request.merged_or_closed_at.as_deref().unwrap_or(s.unknown_date)
 }
 
-fn commit_list(commits: &[CommitSummary], k: &Kit) -> El {
+fn commit_list(commits: &[CommitSummary], s: &Strings, k: &Kit) -> El {
     let mut list = col().key("commit-list").w_full().radius(k.radius.md).border(1.0, k.c.border_weak);
     if commits.is_empty() {
-        list = list.child(col().w_full().padding(16.0).child(text("No commits.").font(k.ty.ui).color(k.c.text_faint)));
+        list = list.child(col().w_full().padding(16.0).child(text(s.no_commits).font(k.ty.ui).color(k.c.text_faint)));
     }
     for (commit_index, commit) in commits.iter().enumerate() {
         let separator = if commit_index == 0 { 0.0 } else { 1.0 };
@@ -414,7 +365,7 @@ fn commit_list(commits: &[CommitSummary], k: &Kit) -> El {
                         .gap(2.0)
                         .child(text(commit.subject.clone()).font(k.ty.ui_medium).color(k.c.text_base))
                         .child(
-                            text(format!("{} committed on {}", commit.author, commit.authored_date))
+                            text((s.committed_on)(&commit.author, &commit.authored_date))
                                 .font(k.ty.caption())
                                 .color(k.c.text_muted),
                         ),
@@ -433,6 +384,7 @@ pub fn files_changed(
     get_diff: fn(&Dialectic) -> &DiffState,
     get_diff_mut: fn(&mut Dialectic) -> &mut DiffState,
     conflicted_files: &[String],
+    s: &Strings,
     k: &Kit,
 ) -> El {
     let diff = get_diff(app);
@@ -449,14 +401,12 @@ pub fn files_changed(
         .gap(12.0)
         .items_center()
         .border_sides([0.0, 0.0, 1.0, 0.0], k.c.border_weak)
-        .child(
-            text(format!("{} files changed", diff.files().len())).font(k.ty.ui_medium).color(k.c.text_base).grow(1.0),
-        )
+        .child(text((s.files_changed_count)(diff.files().len())).font(k.ty.ui_medium).color(k.c.text_base).grow(1.0))
         .child(text(format!("+{total_additions}")).font(k.ty.ui_medium).color(k.c.success.fg))
         .child(text(format!("−{total_deletions}")).font(k.ty.ui_medium).color(k.c.danger.fg))
         .child(
-            SegmentedControl::new(&["Unified", "Split"], Some(usize::from(is_split)))
-                .label("Diff layout")
+            SegmentedControl::new(&[s.unified, s.split], Some(usize::from(is_split)))
+                .label(s.diff_layout)
                 .width(Some(160.0))
                 .on_pick(|app: &mut Dialectic, picked_layout, tx: &mut Tx| {
                     tx.motion(rune::tok::motion::SNAPPY);
@@ -471,11 +421,7 @@ pub fn files_changed(
         let mut file_row = row()
             .key(format!("changed-file-{file_index}"))
             .role("button")
-            .label(if is_conflicted {
-                format!("Show {} (conflicting)", file.path())
-            } else {
-                format!("Show {}", file.path())
-            })
+            .label((s.show_file)(file.path(), is_conflicted))
             .w_full()
             .px(8.0)
             .py(6.0)
@@ -497,18 +443,18 @@ pub fn files_changed(
     }
 
     let diff_view = if diff.files().is_empty() {
-        col().grow(1.0).padding(24.0).child(text("No changes.").font(k.ty.ui).color(k.c.text_faint))
+        col().grow(1.0).padding(24.0).child(text(s.no_changes).font(k.ty.ui).color(k.c.text_faint))
     } else {
         col().grow(1.0).h_full().child(
             DiffView::new(get_diff, get_diff_mut)
                 .key("diff-view")
                 .header_actions({
-                    let (conflicted_files, k) = (conflicted_files.to_vec(), k.clone());
+                    let (conflicted_files, conflict_label, k) = (conflicted_files.to_vec(), s.conflict, k.clone());
                     move |app: &Dialectic, file_index| {
                         let is_conflicted = get_diff(app).files().get(file_index).is_some_and(|file| {
                             conflicted_files.iter().any(|conflicted_file| conflicted_file == file.path())
                         });
-                        if is_conflicted { conflict_chip(&k) } else { col() }
+                        if is_conflicted { conflict_chip(conflict_label, &k) } else { col() }
                     }
                 })
                 .build(app, k),
@@ -533,7 +479,7 @@ pub fn files_changed(
 }
 
 /// The red "Conflict" tag on a conflicting file's diff header.
-fn conflict_chip(k: &Kit) -> El {
+fn conflict_chip(conflict_label: &'static str, k: &Kit) -> El {
     row()
         .key("conflict-chip")
         .px(8.0)
@@ -543,7 +489,7 @@ fn conflict_chip(k: &Kit) -> El {
         .radius(999.0)
         .fill(k.c.danger.bg)
         .border(1.0, k.c.danger.border)
-        .child(text("Conflict").font(k.ty.caption()).color(k.c.danger.fg))
+        .child(text(conflict_label).font(k.ty.caption()).color(k.c.danger.fg))
 }
 
 /// A diff parsed from `git diff` text, conflicting files first, laid out as the user last chose.

@@ -3,7 +3,7 @@
 mod common;
 
 use dialectic::db::PullRequestStatus;
-use dialectic::ui::{Dialectic, Screen, view};
+use dialectic::ui::{Dialectic, Language, Screen, view};
 use rune::{Env, Runtime, TextEdit};
 
 fn press(runtime: &mut Runtime<Dialectic>, key: &str) {
@@ -115,4 +115,9 @@ fn open_review_and_merge_a_pull_request_then_hit_a_conflict() {
 
     press(&mut runtime, "back-to-repositories");
     assert_eq!(runtime.state.screen, Screen::Welcome);
+
+    runtime.update(|app, _| app.set_language(Language::Spanish));
+    settle(&mut runtime);
+    assert!(runtime.find("language-picker").is_some());
+    assert_eq!(Dialectic::without_repository().language, Language::Spanish, "the language is remembered");
 }

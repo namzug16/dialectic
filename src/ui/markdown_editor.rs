@@ -1,7 +1,7 @@
 //! GitHub's comment box: a title field and a description with Write and Preview tabs.
 //! The new pull request screen and the edit form share one `MarkdownDraft` in the app state.
 
-use super::{Dialectic, tab_strip};
+use super::{Dialectic, Strings, tab_strip};
 use rune::{El, TextEdit, col, text};
 use rune_kit::markdown::Markdown;
 use rune_kit::{Kit, TextArea, TextInput};
@@ -19,10 +19,10 @@ impl MarkdownDraft {
     }
 }
 
-pub fn view(draft: &MarkdownDraft, k: &Kit) -> El {
+pub fn view(draft: &MarkdownDraft, s: &Strings, k: &Kit) -> El {
     let title_input = TextInput::new(&draft.title)
-        .label("Title")
-        .placeholder("Title")
+        .label(s.title)
+        .placeholder(s.title)
         .large()
         .width(None)
         .on_edit(|app: &mut Dialectic| &mut app.draft.title)
@@ -31,13 +31,13 @@ pub fn view(draft: &MarkdownDraft, k: &Kit) -> El {
     let tabs = tab_strip(
         k,
         "description-tab",
-        &["Write", "Preview"],
+        &[s.write, s.preview],
         usize::from(draft.showing_preview),
         |app: &mut Dialectic, picked_tab| app.draft.showing_preview = picked_tab == 1,
     );
     let tab_body = if draft.showing_preview {
         let preview = if draft.description.text.trim().is_empty() {
-            text("Nothing to preview").font(k.ty.ui).color(k.c.text_faint)
+            text(s.nothing_to_preview).font(k.ty.ui).color(k.c.text_faint)
         } else {
             rendered_markdown(&draft.description.text, k)
         };
@@ -45,8 +45,8 @@ pub fn view(draft: &MarkdownDraft, k: &Kit) -> El {
     } else {
         col().w_full().padding(8.0).child(
             TextArea::new(&draft.description)
-                .label("Description")
-                .placeholder("Add a description. Markdown is supported: # headings, - lists, - [ ] tasks, [links](url), `code` and ``` fences.")
+                .label(s.description)
+                .placeholder(s.description_placeholder)
                 .width(None)
                 .rows(12)
                 .on_edit(|app: &mut Dialectic| &mut app.draft.description)

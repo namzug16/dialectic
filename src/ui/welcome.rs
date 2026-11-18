@@ -1,19 +1,21 @@
 //! Xcode-style welcome: the app and "Open Repository…" on the left, saved projects on the right.
 
-use super::{Dialectic, error_banner};
+use super::{Dialectic, Strings, error_banner, language_picker};
 use crate::db::SavedProject;
 use rune::{El, FileDialogOptions, Tx, col, row, text};
 use rune_kit::{Button, ButtonVariant, Kit};
 
 pub fn view(app: &Dialectic, k: &Kit) -> El {
-    let open_repository_button = Button::new("Open Repository…")
+    let s = app.strings();
+    let open_repository_button = Button::new(s.open_repository)
         .variant(ButtonVariant::Contrast)
-        .on_press_tx(|_: &mut Dialectic, tx: &mut Tx| {
-            let options = FileDialogOptions { title: "Open a Git repository".into(), ..Default::default() };
+        .on_press_tx(|app: &mut Dialectic, tx: &mut Tx| {
+            let options =
+                FileDialogOptions { title: app.strings().open_repository_dialog_title.into(), ..Default::default() };
             tx.open_folder(options, |app: &mut Dialectic, picked_folder, _: &mut Tx| match picked_folder {
                 Ok(Some(folder)) => app.open_repository(&folder),
                 Ok(None) => {}
-                Err(error) => app.error_message = Some(format!("Could not show the folder picker: {error}")),
+                Err(error) => app.error_message = Some((app.strings().folder_picker_failed)(&error.to_string())),
             });
         })
         .build(k);
@@ -30,26 +32,21 @@ pub fn view(app: &Dialectic, k: &Kit) -> El {
                 .font(rune::tok::TextStyle { size: 32.0, ..k.ty.body_medium }.lh(40.0))
                 .color(k.c.text_strong),
         )
-        .child(text(format!("Version {}", env!("CARGO_PKG_VERSION"))).font(k.ty.ui).color(k.c.text_muted))
-        .child(
-            text("Local pull requests between the branches of one repository.")
-                .font(k.ty.ui)
-                .color(k.c.text_muted)
-                .wrap(),
-        )
+        .child(text((s.version)(env!("CARGO_PKG_VERSION"))).font(k.ty.ui).color(k.c.text_muted))
+        .child(text(s.tagline).font(k.ty.ui).color(k.c.text_muted).wrap())
         .child(col().h(12.0))
-        .child(open_repository_button);
+        .child(open_repository_button)
+        .child(language_picker(app, k));
     if let Some(banner) = error_banner(app, k) {
         introduction = introduction.child(banner);
     }
 
     let mut project_rows = col().key("saved-projects").w_full().gap(2.0);
     if app.saved_projects.is_empty() {
-        project_rows = project_rows
-            .child(text("No repositories yet. Open one to start.").font(k.ty.ui).color(k.c.text_faint).wrap());
+        project_rows = project_rows.child(text(s.no_repositories_yet).font(k.ty.ui).color(k.c.text_faint).wrap());
     }
     for (index, saved_project) in app.saved_projects.iter().enumerate() {
-        project_rows = project_rows.child(saved_project_row(index, saved_project, k));
+        project_rows = project_rows.child(saved_project_row(index, saved_project, s, k));
     }
 
     row().w_full().h_full().window_drag().child(introduction).child(
@@ -60,12 +57,12 @@ pub fn view(app: &Dialectic, k: &Kit) -> El {
             .gap(8.0)
             .fill(k.c.layer_01)
             .border_sides([0.0, 0.0, 0.0, 1.0], k.c.border_weak)
-            .child(text("Recent repositories").font(k.ty.small_medium).color(k.c.text_faint))
+            .child(text(s.recent_repositories).font(k.ty.small_medium).color(k.c.text_faint))
             .child(col().grow(1.0).w_full().scroll(rune::ScrollSpec { stick_bottom: false }).child(project_rows)),
     )
 }
 
-fn saved_project_row(index: usize, saved_project: &SavedProject, k: &Kit) -> El {
+fn saved_project_row(index: usize, saved_project: &SavedProject, s: &Strings, k: &Kit) -> El {
     let repository_path = saved_project.repository_path.clone();
     let is_missing = !repository_path.exists();
     let folder_name = repository_path
@@ -80,11 +77,11 @@ fn saved_project_row(index: usize, saved_project: &SavedProject, k: &Kit) -> El 
         .child(text(folder_name).font(k.ty.ui_medium).color(name_color))
         .child(text(repository_path.display().to_string()).font(k.ty.caption()).color(k.c.text_faint));
     if is_missing {
-        details = details.child(text("Missing").font(k.ty.caption()).color(k.c.danger.fg));
+        details = details.child(text(s.missing).font(k.ty.caption()).color(k.c.danger.fg));
     }
 
     let removed_path = repository_path.clone();
-    let remove_button = Button::new("Remove")
+    let remove_button = Button::new(s.remove)
         .variant(ButtonVariant::GhostFaint)
         .on_press(move |app: &mut Dialectic| {
             if let Some(project_store) = &app.project_store
@@ -99,7 +96,7 @@ fn saved_project_row(index: usize, saved_project: &SavedProject, k: &Kit) -> El 
     let mut project_row = row()
         .key(format!("saved-project-{index}"))
         .role("button")
-        .label(format!("Open {}", repository_path.display()))
+        .label((s.open_path)(&repository_path.display().to_string()))
         .w_full()
         .px(12.0)
         .py(8.0)

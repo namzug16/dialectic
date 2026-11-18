@@ -1,11 +1,12 @@
 //! GitHub's pull request list: open and finished pull requests with their branches.
 
-use super::{Dialectic, error_banner, page, status_badge};
+use super::{Dialectic, Strings, error_banner, page, status_badge};
 use crate::db::{PullRequest, PullRequestStatus};
 use rune::{El, col, row, text};
 use rune_kit::{Button, ButtonVariant, Kit};
 
 pub fn view(app: &Dialectic, k: &Kit) -> El {
+    let s = app.strings();
     let open_count =
         app.pull_requests.iter().filter(|pull_request| pull_request.status == PullRequestStatus::Open).count();
     let finished_count = app.pull_requests.len() - open_count;
@@ -13,9 +14,9 @@ pub fn view(app: &Dialectic, k: &Kit) -> El {
     let title_row = row()
         .w_full()
         .items_center()
-        .child(text("Pull requests").font(k.ty.body_medium).color(k.c.text_strong).grow(1.0))
+        .child(text(s.pull_requests).font(k.ty.body_medium).color(k.c.text_strong).grow(1.0))
         .child(
-            Button::new("New pull request")
+            Button::new(s.new_pull_request)
                 .variant(ButtonVariant::Submit)
                 .on_press(|app: &mut Dialectic| app.show_new_pull_request())
                 .build(k)
@@ -35,8 +36,8 @@ pub fn view(app: &Dialectic, k: &Kit) -> El {
                 .py(12.0)
                 .gap(16.0)
                 .fill(k.c.layer_01)
-                .child(text(format!("{open_count} Open")).font(k.ty.ui_medium).color(k.c.text_base))
-                .child(text(format!("{finished_count} Merged or closed")).font(k.ty.ui).color(k.c.text_muted)),
+                .child(text((s.open_count)(open_count)).font(k.ty.ui_medium).color(k.c.text_base))
+                .child(text((s.merged_or_closed_count)(finished_count)).font(k.ty.ui).color(k.c.text_muted)),
         );
     if app.pull_requests.is_empty() {
         table = table.child(
@@ -45,16 +46,12 @@ pub fn view(app: &Dialectic, k: &Kit) -> El {
                 .padding(32.0)
                 .center()
                 .border_sides([1.0, 0.0, 0.0, 0.0], k.c.border_weak)
-                .child(text("No pull requests yet").font(k.ty.body_medium).color(k.c.text_base))
-                .child(
-                    text("Open one from a branch, here or with `dialectic pr create`.")
-                        .font(k.ty.ui)
-                        .color(k.c.text_muted),
-                ),
+                .child(text(s.no_pull_requests_yet).font(k.ty.body_medium).color(k.c.text_base))
+                .child(text(s.no_pull_requests_hint).font(k.ty.ui).color(k.c.text_muted)),
         );
     }
     for pull_request in &app.pull_requests {
-        table = table.child(pull_request_row(pull_request, k));
+        table = table.child(pull_request_row(pull_request, s, k));
     }
 
     let mut content = col().w_full().gap(16.0).child(title_row);
@@ -64,12 +61,13 @@ pub fn view(app: &Dialectic, k: &Kit) -> El {
     page(content.child(table))
 }
 
-fn pull_request_row(pull_request: &PullRequest, k: &Kit) -> El {
+fn pull_request_row(pull_request: &PullRequest, s: &Strings, k: &Kit) -> El {
     let pull_request_id = pull_request.id;
-    let activity = match (&pull_request.status, &pull_request.merged_or_closed_at) {
-        (PullRequestStatus::Merged, Some(merged_at)) => format!("merged {merged_at}"),
-        (PullRequestStatus::Closed, Some(closed_at)) => format!("closed {closed_at}"),
-        _ => format!("opened {}", pull_request.created_at),
+    let (activity_status, activity_date) = match &pull_request.merged_or_closed_at {
+        Some(merged_or_closed_at) if pull_request.status != PullRequestStatus::Open => {
+            (pull_request.status, merged_or_closed_at)
+        }
+        _ => (PullRequestStatus::Open, &pull_request.created_at),
     };
     row()
         .key(format!("pull-request-{pull_request_id}"))
@@ -83,16 +81,21 @@ fn pull_request_row(pull_request: &PullRequest, k: &Kit) -> El {
         .border_sides([1.0, 0.0, 0.0, 0.0], k.c.border_weak)
         .hover(k.c.hover)
         .on_press(move |app: &mut Dialectic| app.show_pull_request(pull_request_id))
-        .child(status_badge(pull_request.status, k))
+        .child(status_badge(pull_request.status, s, k))
         .child(
             col()
                 .grow(1.0)
                 .gap(4.0)
                 .child(text(pull_request.title.clone()).font(k.ty.body_medium).color(k.c.text_strong))
                 .child(
-                    text(format!("#{pull_request_id} {activity} UTC by {}", pull_request.author))
-                        .font(k.ty.caption())
-                        .color(k.c.text_muted),
+                    text((s.pull_request_byline)(
+                        pull_request_id,
+                        activity_status,
+                        activity_date,
+                        &pull_request.author,
+                    ))
+                    .font(k.ty.caption())
+                    .color(k.c.text_muted),
                 ),
         )
         .child(super::branch_flow(&pull_request.source_branch, &pull_request.target_branch, k))

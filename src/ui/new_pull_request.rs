@@ -15,10 +15,11 @@ pub struct NewPullRequestForm {
 
 pub fn view(app: &Dialectic, k: &Kit, overlay_layer: &mut Vec<El>) -> El {
     let form = &app.new_pull_request_form;
+    let s = app.strings();
     let branch_picker = |picker_key: &'static str, current_branch: &Option<String>, overlay_layer: &mut Vec<El>| {
         Select::new(picker_key, &form.local_branches)
-            .label(if picker_key == "source-branch" { "Source branch" } else { "Target branch" })
-            .placeholder("Choose a branch")
+            .label(if picker_key == "source-branch" { s.source_branch } else { s.target_branch })
+            .placeholder(s.choose_a_branch)
             .current(current_branch.as_deref())
             .open(form.open_branch_picker == Some(picker_key))
             .on_toggle(move |app: &mut Dialectic| {
@@ -48,9 +49,9 @@ pub fn view(app: &Dialectic, k: &Kit, overlay_layer: &mut Vec<El>) -> El {
         .radius(k.radius.md)
         .fill(k.c.layer_01)
         .border(1.0, k.c.border_weak)
-        .child(text("Merge").font(k.ty.ui).color(k.c.text_muted))
+        .child(text(s.merge).font(k.ty.ui).color(k.c.text_muted))
         .child(branch_picker("source-branch", &form.source_branch, overlay_layer))
-        .child(text("→ into").font(k.ty.ui).color(k.c.text_muted))
+        .child(text(s.into).font(k.ty.ui).color(k.c.text_muted))
         .child(branch_picker("target-branch", &form.target_branch, overlay_layer));
 
     let actions = row()
@@ -58,13 +59,13 @@ pub fn view(app: &Dialectic, k: &Kit, overlay_layer: &mut Vec<El>) -> El {
         .gap(8.0)
         .justify_end()
         .child(
-            Button::new("Cancel")
+            Button::new(s.cancel)
                 .variant(ButtonVariant::Ghost)
                 .on_press(|app: &mut Dialectic| app.show_pull_request_list())
                 .build(k),
         )
         .child(
-            Button::new("Create pull request")
+            Button::new(s.create_pull_request)
                 .variant(ButtonVariant::Submit)
                 .on_press(|app: &mut Dialectic| app.create_pull_request_from_draft())
                 .build(k)
@@ -74,15 +75,11 @@ pub fn view(app: &Dialectic, k: &Kit, overlay_layer: &mut Vec<El>) -> El {
     let mut content = col()
         .w_full()
         .gap(16.0)
-        .child(text("Open a pull request").font(k.ty.body_medium).color(k.c.text_strong))
-        .child(
-            text("Pick the branch with the changes and the branch they should merge into.")
-                .font(k.ty.ui)
-                .color(k.c.text_muted),
-        )
+        .child(text(s.open_a_pull_request).font(k.ty.body_medium).color(k.c.text_strong))
+        .child(text(s.new_pull_request_hint).font(k.ty.ui).color(k.c.text_muted))
         .child(branch_row);
     if let Some(banner) = error_banner(app, k) {
         content = content.child(banner);
     }
-    page(content.child(markdown_editor::view(&app.draft, k)).child(actions))
+    page(content.child(markdown_editor::view(&app.draft, s, k)).child(actions))
 }

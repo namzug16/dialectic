@@ -5,6 +5,7 @@ mod markdown_editor;
 mod new_pull_request;
 mod pull_request_detail;
 mod pull_request_list;
+mod strings;
 mod welcome;
 
 use crate::db::{MergeMethod, ProjectStore, PullRequest, PullRequestStatus, SavedProject};
@@ -15,8 +16,9 @@ use new_pull_request::NewPullRequestForm;
 use pull_request_detail::PullRequestDetail;
 use rune::{App, AppSpec, Cx, El, KeyEvent, Tx, col, row, text};
 use rune_kit::diff::{DiffMode, DiffState};
-use rune_kit::{Button, ButtonVariant, Kit};
+use rune_kit::{Button, ButtonVariant, Kit, SegmentedControl};
 use std::path::Path;
+pub use strings::{Language, Strings};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -47,9 +49,12 @@ pub struct Dialectic {
     pub working_changes: WorkingChanges,
     /// The last failure, shown on the current screen until the next action.
     pub error_message: Option<String>,
+    /// Every label comes from `language.strings()`; remembered across launches.
+    pub language: Language,
 }
 
 const DIFF_MODE_SETTING: &str = "diff_mode";
+const LANGUAGE_SETTING: &str = "language";
 
 impl Dialectic {
     /// Opens the repository named by the first argument Rune doesn't use itself, else the welcome screen.
@@ -83,13 +88,36 @@ impl Dialectic {
             pull_request_diff: DiffState::new(Vec::new()),
             working_changes: WorkingChanges::default(),
             error_message: None,
+            language: Language::English,
         };
         match ProjectStore::open_in_app_data_dir() {
             Ok(project_store) => app.project_store = Some(project_store),
-            Err(error) => app.error_message = Some(format!("Saved projects are unavailable: {error}")),
+            Err(error) => app.error_message = Some((app.strings().saved_projects_unavailable)(&error.to_string())),
+        }
+        if let Some(saved_language) = app
+            .project_store
+            .as_ref()
+            .and_then(|project_store| project_store.setting(LANGUAGE_SETTING).ok().flatten())
+            .and_then(|code| Language::from_code(&code))
+        {
+            app.language = saved_language;
         }
         app.reload_saved_projects();
         app
+    }
+
+    pub fn strings(&self) -> &'static Strings {
+        self.language.strings()
+    }
+
+    /// Switches every label and remembers the choice for next time.
+    pub fn set_language(&mut self, language: Language) {
+        self.language = language;
+        if let Some(project_store) = &self.project_store
+            && let Err(error) = project_store.set_setting(LANGUAGE_SETTING, language.code())
+        {
+            self.error_message = Some(error.to_string());
+        }
     }
 
     pub fn reload_saved_projects(&mut self) {
@@ -156,7 +184,7 @@ impl Dialectic {
         let Some(repository) = &self.repository else { return };
         let form = &self.new_pull_request_form;
         let (Some(source_branch), Some(target_branch)) = (&form.source_branch, &form.target_branch) else {
-            self.error_message = Some("Choose both a source and a target branch.".into());
+            self.error_message = Some(self.strings().choose_both_branches.into());
             return;
         };
         match repository.create_pull_request(
@@ -396,22 +424,23 @@ const TITLEBAR_HEIGHT: f32 = 52.0;
 /// top screens, else to the pull request list), the repository's name and path, then the way to the
 /// other top screen: Your changes, or, from there, Pull requests (loud while any are open).
 fn repository_header(app: &Dialectic, k: &Kit, insets: rune::ChromeInsets) -> El {
+    let s = app.strings();
     let (repository_name, repository_path) = app
         .repository
         .as_ref()
         .map(|repository| (repository.name(), repository.top_level_path.display().to_string()))
         .unwrap_or_default();
     let back_button = if matches!(app.screen, Screen::Changes | Screen::PullRequestList) {
-        Button::new("← Repositories")
+        Button::new(s.back_to_repositories)
             .variant(ButtonVariant::Ghost)
-            .help("Back to the list of repositories")
+            .help(s.back_to_repositories_help)
             .on_press(|app: &mut Dialectic| app.show_welcome())
             .build(k)
             .key("back-to-repositories")
     } else {
-        Button::new("← All pull requests")
+        Button::new(s.back_to_pull_requests)
             .variant(ButtonVariant::Ghost)
-            .help("Back to this repository's pull requests")
+            .help(s.back_to_pull_requests_help)
             .on_press(|app: &mut Dialectic| app.show_pull_request_list())
             .build(k)
             .key("back-to-pull-requests")
@@ -431,29 +460,42 @@ fn repository_header(app: &Dialectic, k: &Kit, insets: rune::ChromeInsets) -> El
         .child(col().w(1.0).h(20.0).fill(k.c.border_weak))
         .child(text(repository_name).key("repository-name").font(k.ty.body_medium).color(k.c.text_strong))
         .child(text(repository_path).font(k.ty.caption()).color(k.c.text_faint).truncate().shrink().grow(1.0))
+        .child(language_picker(app, k))
         .child(if app.screen == Screen::Changes {
-            pull_requests_button(app.open_pull_request_count(), k)
+            pull_requests_button(app.open_pull_request_count(), s, k)
         } else {
-            Button::new("Your changes")
+            Button::new(s.your_changes)
                 .variant(ButtonVariant::Outline)
-                .help("See, commit and branch your uncommitted changes")
+                .help(s.your_changes_help)
                 .on_press(|app: &mut Dialectic| app.show_changes())
                 .build(k)
                 .key("show-changes-button")
         })
 }
 
+/// English or Español, each named in itself so anyone can find their own; on the welcome screen and the header.
+pub fn language_picker(app: &Dialectic, k: &Kit) -> El {
+    let language_names = Language::ALL.map(Language::native_name);
+    let selected_index = Language::ALL.iter().position(|language| *language == app.language);
+    SegmentedControl::new(&language_names, selected_index)
+        .label(app.strings().language)
+        .fit()
+        .on_pick(|app: &mut Dialectic, picked_index, _: &mut Tx| app.set_language(Language::ALL[picked_index]))
+        .build(k)
+        .key("language-picker")
+}
+
 /// While pull requests wait for review: GitHub's open green with a count pill, in both themes (the kit's
 /// Submit button is white on dark), so nobody misses them. Otherwise a plain outline button.
-pub fn pull_requests_button(open_pull_request_count: usize, k: &Kit) -> El {
+pub fn pull_requests_button(open_pull_request_count: usize, s: &Strings, k: &Kit) -> El {
     if open_pull_request_count == 0 {
-        return Button::new("Pull requests")
+        return Button::new(s.pull_requests)
             .variant(ButtonVariant::Outline)
             .on_press(|app: &mut Dialectic| app.show_pull_request_list())
             .build(k)
             .key("show-pull-requests-button");
     }
-    let label = if open_pull_request_count == 1 { "Pull request to review" } else { "Pull requests to review" };
+    let label = (s.pull_requests_to_review)(open_pull_request_count);
     let open_green = rune::color::hex("#1f883d").unwrap_or(k.c.success.fg);
     row()
         .key("show-pull-requests-button")
@@ -492,11 +534,11 @@ pub fn page(content: El) -> El {
 }
 
 /// GitHub's state colours: green open, purple merged, red closed.
-pub fn status_badge(status: PullRequestStatus, k: &Kit) -> El {
+pub fn status_badge(status: PullRequestStatus, s: &Strings, k: &Kit) -> El {
     let (label, colour) = match status {
-        PullRequestStatus::Open => ("Open", "#1f883d"),
-        PullRequestStatus::Merged => ("Merged", "#8250df"),
-        PullRequestStatus::Closed => ("Closed", "#cf222e"),
+        PullRequestStatus::Open => (s.status_open, "#1f883d"),
+        PullRequestStatus::Merged => (s.status_merged, "#8250df"),
+        PullRequestStatus::Closed => (s.status_closed, "#cf222e"),
     };
     row()
         .key("status-badge")

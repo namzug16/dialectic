@@ -38,6 +38,7 @@ screenshots: ## Render every screen headless into target/screenshots
 	scripts/create-demo-repository.sh $(DEMO_DIR) $(DIALECTIC_DEBUG)
 	@mkdir -p $(SCREENSHOT_DIR)
 	DIALECTIC_DATA_DIR=$(SCREENSHOT_DATA_DIR) $(DIALECTIC_DEBUG) --chrome --snap $(SCREENSHOT_DIR)/welcome.png
+	DIALECTIC_DATA_DIR=$(SCREENSHOT_DATA_DIR) $(DIALECTIC_DEBUG) --scene settings --chrome --snap $(SCREENSHOT_DIR)/settings.png >/dev/null
 	@for scene in pull-request-list new-pull-request new-pull-request-preview pull-request-overview \
 		pull-request-commits pull-request-files pull-request-files-split pull-request-edit pull-request-rebase; do \
 		DIALECTIC_DATA_DIR=$(SCREENSHOT_DATA_DIR) $(DIALECTIC_DEBUG) $(DEMO_DIR) --pull-request 1 --scene $$scene --chrome \

@@ -1,11 +1,13 @@
 //! One pull request: GitHub's header and its Overview, Commits and Files changed tabs.
 
-use super::{Dialectic, Strings, branch_flow, error_banner, markdown_editor, status_badge, tab_strip, warning_mark};
+use super::{
+    Dialectic, Strings, branch_flow, error_banner, icons, markdown_editor, status_badge, tab_strip, warning_mark,
+};
 use crate::db::{MergeMethod, PullRequest, PullRequestStatus};
 use crate::git::CommitSummary;
-use rune::{El, Tx, col, row, text};
+use rune::{El, Tx, col, icon, row, text};
 use rune_kit::diff::{DiffMode, DiffState, DiffView};
-use rune_kit::{Button, ButtonVariant, Kit, SegmentedControl};
+use rune_kit::{Button, ButtonVariant, Kit, ScrollBar, SegmentedControl};
 
 pub const OVERVIEW_TAB: usize = 0;
 pub const COMMITS_TAB: usize = 1;
@@ -59,6 +61,7 @@ pub fn view(app: &Dialectic, detail: &PullRequestDetail, k: &Kit) -> El {
                 .child(if pull_request.status == PullRequestStatus::Open && !detail.is_editing {
                     Button::new(s.edit)
                         .variant(ButtonVariant::Outline)
+                        .icon(&icons::PENCIL)
                         .on_press(|app: &mut Dialectic| app.start_editing_shown_pull_request())
                         .build(k)
                         .key("edit-button")
@@ -107,7 +110,7 @@ pub fn view(app: &Dialectic, detail: &PullRequestDetail, k: &Kit) -> El {
         COMMITS_TAB => scrolling_column(commit_list(&detail.commits, s, k)),
         _ => scrolling_column(overview(app, detail, k)),
     };
-    col().w_full().grow(1.0).child(top).child(tab_body)
+    col().w_full().grow(1.0).min_h(0.0).child(top).child(tab_body)
 }
 
 /// Shown on every tab while the branches conflict, so a reviewer can't miss it.
@@ -310,6 +313,7 @@ fn merge_buttons(chosen_merge_method: MergeMethod, s: &Strings, k: &Kit) -> El {
         .child(
             Button::new(merge_label)
                 .variant(ButtonVariant::Submit)
+                .icon(&icons::GIT_MERGE)
                 .on_press(|app: &mut Dialectic| app.merge_shown_pull_request())
                 .build(k)
                 .key("merge-button"),
@@ -330,6 +334,7 @@ fn merge_buttons(chosen_merge_method: MergeMethod, s: &Strings, k: &Kit) -> El {
 fn close_button(s: &Strings, k: &Kit) -> El {
     Button::new(s.close_pull_request)
         .variant(ButtonVariant::Outline)
+        .icon(&icons::GIT_PULL_REQUEST_CLOSED)
         .on_press(|app: &mut Dialectic| app.close_shown_pull_request())
         .build(k)
         .key("close-button")
@@ -384,7 +389,7 @@ pub fn files_changed(
     get_diff: fn(&Dialectic) -> &DiffState,
     get_diff_mut: fn(&mut Dialectic) -> &mut DiffState,
     conflicted_files: &[String],
-    s: &Strings,
+    s: &'static Strings,
     k: &Kit,
 ) -> El {
     let diff = get_diff(app);
@@ -415,37 +420,27 @@ pub fn files_changed(
                 .build(k),
         );
 
-    let mut file_list = col().key("changed-files").w_full().gap(2.0).padding(8.0);
-    for (file_index, file) in diff.files().iter().enumerate() {
-        let is_conflicted = conflicted_files.iter().any(|conflicted_file| conflicted_file == file.path());
-        let mut file_row = row()
-            .key(format!("changed-file-{file_index}"))
-            .role("button")
-            .label((s.show_file)(file.path(), is_conflicted))
-            .w_full()
-            .px(8.0)
-            .py(6.0)
-            .gap(8.0)
-            .items_center()
-            .radius(k.radius.sm)
-            .hover(k.c.hover)
-            .on_press_tx(move |app: &mut Dialectic, tx: &mut Tx| get_diff_mut(app).scroll_to_file(file_index, tx));
-        if is_conflicted {
-            file_row = file_row.fill(k.c.danger.bg).border(1.0, k.c.danger.border).child(warning_mark(k));
-        }
-        let path_colour = if is_conflicted { k.c.danger.fg } else { k.c.text_base };
-        file_list = file_list.child(
-            file_row
-                .child(text(file.path().to_owned()).font(k.ty.ui).color(path_colour).grow(1.0).wrap_anywhere())
-                .child(text(format!("+{}", file.additions())).font(k.ty.caption()).color(k.c.success.fg))
-                .child(text(format!("−{}", file.deletions())).font(k.ty.caption()).color(k.c.danger.fg)),
+    // Only the rows in view are built: a checkout can have thousands of changed files.
+    let file_list =
+        col().key("changed-files").w_full().pl(6.0).pr(14.0).py(6.0).growth(rune::GrowthSpec::default()).virtual_rows(
+            diff.files().len(),
+            FILE_ROW_HEIGHT,
+            move |app: &Dialectic, file_index| get_diff(app).files()[file_index].path().into(),
+            {
+                let (conflicted_files, k) = (conflicted_files.to_vec(), k.clone());
+                move |app: &Dialectic, file_index| {
+                    let file = &get_diff(app).files()[file_index];
+                    let is_conflicted = conflicted_files.iter().any(|conflicted_file| conflicted_file == file.path());
+                    changed_file_row(file, file_index, is_conflicted, get_diff_mut, s, &k)
+                }
+            },
         );
-    }
 
     let diff_view = if diff.files().is_empty() {
         col().grow(1.0).padding(24.0).child(text(s.no_changes).font(k.ty.ui).color(k.c.text_faint))
     } else {
-        col().grow(1.0).h_full().child(
+        // `min_w(0)` lets the diff narrow to the window, so its own viewport scrolls long lines sideways.
+        col().grow(1.0).min_w(0.0).h_full().child(
             DiffView::new(get_diff, get_diff_mut)
                 .key("diff-view")
                 .header_actions({
@@ -461,21 +456,72 @@ pub fn files_changed(
         )
     };
 
-    col().w_full().grow(1.0).child(toolbar).child(
+    // `min_h(0)` down to both viewports, or they grow to their content and never scroll.
+    col().w_full().grow(1.0).min_h(0.0).child(toolbar).child(
         row()
             .w_full()
             .grow(1.0)
+            .min_h(0.0)
             .child(
                 col()
-                    .w(280.0)
+                    .w(300.0)
                     .h_full()
                     .fill(k.c.layer_01)
                     .border_sides([0.0, 1.0, 0.0, 0.0], k.c.border_weak)
                     .scroll(rune::ScrollSpec { stick_bottom: false })
-                    .child(file_list),
+                    .child(file_list)
+                    .scroll_bar(k),
             )
             .child(diff_view),
     )
+}
+
+const FILE_ROW_HEIGHT: f32 = 30.0;
+
+/// One line per file: its type icon, name, folder (faint, cut from the start so the nearest folder
+/// shows) and line counts. Pressing it scrolls the diff to the file.
+fn changed_file_row(
+    file: &rune_kit::diff::FileDiff,
+    file_index: usize,
+    is_conflicted: bool,
+    get_diff_mut: fn(&mut Dialectic) -> &mut DiffState,
+    s: &Strings,
+    k: &Kit,
+) -> El {
+    let (folder, file_name) = file.path().rsplit_once('/').unwrap_or(("", file.path()));
+    let mut file_row = row()
+        .role("button")
+        .label((s.show_file)(file.path(), is_conflicted))
+        .help(file.path().to_owned())
+        .w_full()
+        .h(FILE_ROW_HEIGHT - 2.0)
+        .mb(2.0)
+        .px(8.0)
+        .gap(6.0)
+        .items_center()
+        .radius(k.radius.sm)
+        .hover(k.c.hover)
+        .on_press_tx(move |app: &mut Dialectic, tx: &mut Tx| get_diff_mut(app).scroll_to_file(file_index, tx));
+    if is_conflicted {
+        file_row = file_row.fill(k.c.danger.bg).border(1.0, k.c.danger.border).child(warning_mark(k));
+    } else {
+        file_row = file_row.child(icon(rune_kit::file_icon(file_name), 14.0).color(k.c.text_muted));
+    }
+    let name_colour = if is_conflicted { k.c.danger.fg } else { k.c.text_base };
+    file_row
+        // Both names give way before the counts do; the folder keeps room for its "…" (it draws past a zero width).
+        .child(text(file_name.to_owned()).font(k.ty.ui).color(name_colour).truncate().shrink())
+        .child(
+            text(folder.to_owned())
+                .font(k.ty.caption())
+                .color(k.c.text_faint)
+                .truncate_head()
+                .shrink()
+                .min_w(16.0)
+                .grow(1.0),
+        )
+        .child(text(format!("+{}", file.additions())).font(k.ty.caption()).color(k.c.success.fg))
+        .child(text(format!("−{}", file.deletions())).font(k.ty.caption()).color(k.c.danger.fg))
 }
 
 /// The red "Conflict" tag on a conflicting file's diff header.

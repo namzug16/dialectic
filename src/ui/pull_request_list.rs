@@ -1,6 +1,6 @@
 //! GitHub's pull request list: open and finished pull requests with their branches.
 
-use super::{Dialectic, Strings, error_banner, page, status_badge};
+use super::{Dialectic, Strings, error_banner, icons, page, status_badge};
 use crate::db::{PullRequest, PullRequestStatus};
 use rune::{El, col, row, text};
 use rune_kit::{Button, ButtonVariant, Kit};
@@ -18,6 +18,7 @@ pub fn view(app: &Dialectic, k: &Kit) -> El {
         .child(
             Button::new(s.new_pull_request)
                 .variant(ButtonVariant::Submit)
+                .icon(&icons::PLUS)
                 .on_press(|app: &mut Dialectic| app.show_new_pull_request())
                 .build(k)
                 .key("new-pull-request-button"),

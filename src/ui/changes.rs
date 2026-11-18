@@ -2,10 +2,10 @@
 //! so the whole way from editing files to opening a pull request stays in the app.
 
 use super::pull_request_detail::files_changed;
-use super::{Dialectic, Strings, error_banner, pull_requests_button};
-use rune::{El, TextEdit, Tx, col, row, text};
+use super::{Dialectic, Strings, error_banner, icons, pull_requests_button};
+use rune::{El, TextEdit, Tx, col, icon, row, text};
 use rune_kit::diff::DiffState;
-use rune_kit::{Button, ButtonVariant, Kit, Select, TextInput};
+use rune_kit::{Button, ButtonVariant, IconButton, IconButtonVariant, Kit, Select, TextInput};
 
 #[derive(Default)]
 pub struct WorkingChanges {
@@ -24,19 +24,6 @@ pub fn view(app: &Dialectic, k: &Kit, overlay_layer: &mut Vec<El>) -> El {
     let changed_file_count = changes.diff.files().len();
     let on_default_branch = matches!(changes.current_branch.as_deref(), Some("main" | "master"));
 
-    let title_row = row()
-        .w_full()
-        .items_center()
-        .child(text(s.your_changes).font(k.ty.body_medium).color(k.c.text_strong).grow(1.0))
-        .child(
-            Button::new(s.refresh)
-                .variant(ButtonVariant::Ghost)
-                .help(s.refresh_help)
-                .on_press(|app: &mut Dialectic| app.reload_changes())
-                .build(k)
-                .key("refresh-changes-button"),
-        );
-
     let branch_picker = Select::new("current-branch", &changes.local_branches)
         .label(s.current_branch)
         .placeholder(s.detached_head)
@@ -46,63 +33,71 @@ pub fn view(app: &Dialectic, k: &Kit, overlay_layer: &mut Vec<El>) -> El {
         .on_close(|app: &mut Dialectic| app.working_changes.branch_picker_open = false)
         .on_choose(|app: &mut Dialectic, chosen_branch: &str, _: &mut Tx| app.switch_branch(chosen_branch))
         .build(k, overlay_layer);
-    let branch_row = row()
+    // One bar: the branch and a new one on the left, the commit on the right, so the diff keeps the window.
+    let mut toolbar = row()
         .key("branch-row")
         .w_full()
-        .padding(12.0)
+        .px(16.0)
+        .py(8.0)
         .gap(8.0)
         .items_center()
-        .radius(k.radius.md)
         .fill(k.c.layer_01)
-        .border(1.0, k.c.border_weak)
-        .child(text(s.on_branch).font(k.ty.ui).color(k.c.text_muted))
+        .border_sides([0.0, 0.0, 1.0, 0.0], k.c.border_weak)
+        .child(icon(&icons::GIT_BRANCH, 16.0).color(k.c.text_muted))
         .child(branch_picker)
-        .child(text(s.or_start_a_new_one).font(k.ty.ui).color(k.c.text_muted))
         .child(
             TextInput::new(&changes.new_branch_name)
                 .label(s.new_branch_name)
                 .placeholder(s.new_branch_placeholder)
-                .width(Some(200.0))
+                .width(Some(180.0))
                 .on_edit(|app: &mut Dialectic| &mut app.working_changes.new_branch_name)
                 .on_submit(|app: &mut Dialectic, _: &mut Tx| app.create_branch())
                 .build(k),
         )
         .child(
-            Button::new(s.create_branch)
-                .variant(ButtonVariant::Outline)
+            IconButton::new(&icons::GIT_BRANCH_PLUS)
+                .variant(IconButtonVariant::Ghost)
+                .label(s.create_branch)
                 .help(s.create_branch_help)
                 .on_press(|app: &mut Dialectic| app.create_branch())
                 .build(k)
                 .key("create-branch-button"),
-        );
+        )
+        .child(col().w(1.0).h(20.0).mx(4.0).fill(k.c.border_weak));
+    toolbar = if changed_file_count > 0 {
+        toolbar.child(commit_message_input(changes, s, k)).child(
+            Button::new((s.commit_files)(changed_file_count))
+                .variant(ButtonVariant::Submit)
+                .icon(&icons::GIT_COMMIT)
+                .on_press(|app: &mut Dialectic| app.commit_all_changes())
+                .build(k)
+                .key("commit-button"),
+        )
+    } else {
+        toolbar.child(col().grow(1.0))
+    };
+    toolbar = toolbar.child(
+        IconButton::new(&icons::REFRESH)
+            .variant(IconButtonVariant::Ghost)
+            .label(s.refresh)
+            .help(s.refresh_help)
+            .on_press(|app: &mut Dialectic| app.reload_changes())
+            .build(k)
+            .key("refresh-changes-button"),
+    );
 
-    let mut content = col().w_full().max_w(1012.0).gap(12.0).child(title_row).child(branch_row);
+    let mut top = col().w_full().child(toolbar);
     if on_default_branch && changed_file_count > 0 {
-        content = content.child(
-            row()
-                .key("default-branch-warning")
-                .w_full()
-                .padding(12.0)
-                .radius(k.radius.md)
-                .fill(k.c.warning.bg)
-                .border(1.0, k.c.warning.border)
-                .child(text(s.default_branch_warning).font(k.ty.ui).color(k.c.warning.fg).wrap()),
-        );
+        top = top.child(notice(
+            "default-branch-warning",
+            text(s.default_branch_warning).font(k.ty.ui).color(k.c.warning.fg).wrap(),
+            k.c.warning.bg,
+            k.c.warning.border,
+        ));
     }
     if let Some(banner) = error_banner(app, k) {
-        content = content.child(banner);
+        top = top.child(col().w_full().px(16.0).py(8.0).child(banner));
     }
-    if changed_file_count > 0 {
-        content = content.child(commit_row(changes, changed_file_count, s, k));
-    }
-
-    let top = col()
-        .w_full()
-        .px(24.0)
-        .py(16.0)
-        .items_center()
-        .border_sides([0.0, 0.0, 1.0, 0.0], k.c.border_weak)
-        .child(content);
     let body = if changed_file_count == 0 {
         nothing_to_commit(changes, on_default_branch, app.open_pull_request_count(), s, k)
     } else {
@@ -115,34 +110,32 @@ pub fn view(app: &Dialectic, k: &Kit, overlay_layer: &mut Vec<El>) -> El {
             k,
         )
     };
-    col().w_full().grow(1.0).child(top).child(body)
+    col().w_full().grow(1.0).min_h(0.0).child(top).child(body)
 }
 
 /// Commits everything: a person new to git shouldn't have to learn the staging area first.
-fn commit_row(changes: &WorkingChanges, changed_file_count: usize, s: &Strings, k: &Kit) -> El {
+fn commit_message_input(changes: &WorkingChanges, s: &Strings, k: &Kit) -> El {
+    col().grow(1.0).min_w(160.0).child(
+        TextInput::new(&changes.commit_message)
+            .label(s.commit_message)
+            .placeholder(s.commit_message_placeholder)
+            .width(None)
+            .on_edit(|app: &mut Dialectic| &mut app.working_changes.commit_message)
+            .on_submit(|app: &mut Dialectic, _: &mut Tx| app.commit_all_changes())
+            .build(k),
+    )
+}
+
+/// A full-width strip under the bar, in a status colour.
+fn notice(key: &str, message: El, fill: rune::Color, border: rune::Color) -> El {
     row()
-        .key("commit-row")
+        .key(key.to_owned())
         .w_full()
-        .gap(8.0)
-        .items_center()
-        .child(
-            col().grow(1.0).child(
-                TextInput::new(&changes.commit_message)
-                    .label(s.commit_message)
-                    .placeholder(s.commit_message_placeholder)
-                    .width(None)
-                    .on_edit(|app: &mut Dialectic| &mut app.working_changes.commit_message)
-                    .on_submit(|app: &mut Dialectic, _: &mut Tx| app.commit_all_changes())
-                    .build(k),
-            ),
-        )
-        .child(
-            Button::new((s.commit_files)(changed_file_count))
-                .variant(ButtonVariant::Submit)
-                .on_press(|app: &mut Dialectic| app.commit_all_changes())
-                .build(k)
-                .key("commit-button"),
-        )
+        .px(16.0)
+        .py(8.0)
+        .fill(fill)
+        .border_sides([0.0, 0.0, 1.0, 0.0], border)
+        .child(message)
 }
 
 /// Centred in the empty space: says there's nothing to commit, then points at what to do instead,
@@ -182,6 +175,7 @@ fn nothing_to_commit(
     if !on_default_branch && changes.current_branch.is_some() {
         empty_state = empty_state.child(
             Button::new(s.open_a_pull_request)
+                .icon(&icons::GIT_PULL_REQUEST)
                 .variant(if open_pull_request_count > 0 { ButtonVariant::Outline } else { ButtonVariant::Submit })
                 .on_press(|app: &mut Dialectic| app.show_new_pull_request())
                 .build(k)

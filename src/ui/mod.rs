@@ -1,10 +1,12 @@
 //! The desktop app: one window whose `Screen` picks what `view` draws.
 
 mod changes;
+mod icons;
 mod markdown_editor;
 mod new_pull_request;
 mod pull_request_detail;
 mod pull_request_list;
+mod settings;
 mod strings;
 mod welcome;
 
@@ -14,9 +16,9 @@ use changes::WorkingChanges;
 use markdown_editor::MarkdownDraft;
 use new_pull_request::NewPullRequestForm;
 use pull_request_detail::PullRequestDetail;
-use rune::{App, AppSpec, Cx, El, KeyEvent, Tx, col, row, text};
+use rune::{App, AppSpec, Cx, El, KeyEvent, Tx, col, icon, row, text};
 use rune_kit::diff::{DiffMode, DiffState};
-use rune_kit::{Button, ButtonVariant, Kit, SegmentedControl};
+use rune_kit::{Button, ButtonVariant, Kit};
 use std::path::Path;
 pub use strings::{Language, Strings};
 
@@ -27,6 +29,7 @@ pub enum Screen {
     NewPullRequest,
     PullRequestDetail,
     Changes,
+    Settings,
 }
 
 pub struct Dialectic {
@@ -145,6 +148,11 @@ impl Dialectic {
                 self.screen = Screen::Welcome;
             }
         }
+    }
+
+    pub fn show_settings(&mut self) {
+        self.error_message = None;
+        self.screen = Screen::Settings;
     }
 
     pub fn show_welcome(&mut self) {
@@ -407,18 +415,19 @@ pub fn view(app: &Dialectic, cx: &mut Cx<Dialectic>) -> El {
             None => pull_request_list::view(app, &k),
         },
         Screen::Changes => changes::view(app, &k, &mut overlay_layer),
+        Screen::Settings => settings::view(app, &k),
     };
     // The window draws no title bar of its own (`App::titlebar`): the repository header is the band, with
-    // the traffic lights (macOS) or caption buttons (Windows) over its ends; the welcome screen drags whole.
+    // the traffic lights (macOS) or caption buttons (Windows) over its ends; welcome and settings drag whole.
     let insets = cx.chrome_insets();
     let mut window_content = col().w_full().h_full().fill(k.c.bg_base);
-    if app.screen != Screen::Welcome {
+    if !matches!(app.screen, Screen::Welcome | Screen::Settings) {
         window_content = window_content.child(repository_header(app, &k, insets));
     }
     rune_kit::root(window_content.child(screen), overlay_layer)
 }
 
-const TITLEBAR_HEIGHT: f32 = 52.0;
+pub const TITLEBAR_HEIGHT: f32 = 52.0;
 
 /// The bar over every repository screen: one labelled back button (to the repositories from the two
 /// top screens, else to the pull request list), the repository's name and path, then the way to the
@@ -433,6 +442,7 @@ fn repository_header(app: &Dialectic, k: &Kit, insets: rune::ChromeInsets) -> El
     let back_button = if matches!(app.screen, Screen::Changes | Screen::PullRequestList) {
         Button::new(s.back_to_repositories)
             .variant(ButtonVariant::Ghost)
+            .icon(&icons::ARROW_LEFT)
             .help(s.back_to_repositories_help)
             .on_press(|app: &mut Dialectic| app.show_welcome())
             .build(k)
@@ -440,6 +450,7 @@ fn repository_header(app: &Dialectic, k: &Kit, insets: rune::ChromeInsets) -> El
     } else {
         Button::new(s.back_to_pull_requests)
             .variant(ButtonVariant::Ghost)
+            .icon(&icons::ARROW_LEFT)
             .help(s.back_to_pull_requests_help)
             .on_press(|app: &mut Dialectic| app.show_pull_request_list())
             .build(k)
@@ -460,29 +471,17 @@ fn repository_header(app: &Dialectic, k: &Kit, insets: rune::ChromeInsets) -> El
         .child(col().w(1.0).h(20.0).fill(k.c.border_weak))
         .child(text(repository_name).key("repository-name").font(k.ty.body_medium).color(k.c.text_strong))
         .child(text(repository_path).font(k.ty.caption()).color(k.c.text_faint).truncate().shrink().grow(1.0))
-        .child(language_picker(app, k))
         .child(if app.screen == Screen::Changes {
             pull_requests_button(app.open_pull_request_count(), s, k)
         } else {
             Button::new(s.your_changes)
                 .variant(ButtonVariant::Outline)
+                .icon(&icons::FILE_DIFF)
                 .help(s.your_changes_help)
                 .on_press(|app: &mut Dialectic| app.show_changes())
                 .build(k)
                 .key("show-changes-button")
         })
-}
-
-/// English or Español, each named in itself so anyone can find their own; on the welcome screen and the header.
-pub fn language_picker(app: &Dialectic, k: &Kit) -> El {
-    let language_names = Language::ALL.map(Language::native_name);
-    let selected_index = Language::ALL.iter().position(|language| *language == app.language);
-    SegmentedControl::new(&language_names, selected_index)
-        .label(app.strings().language)
-        .fit()
-        .on_pick(|app: &mut Dialectic, picked_index, _: &mut Tx| app.set_language(Language::ALL[picked_index]))
-        .build(k)
-        .key("language-picker")
 }
 
 /// While pull requests wait for review: GitHub's open green with a count pill, in both themes (the kit's
@@ -491,6 +490,7 @@ pub fn pull_requests_button(open_pull_request_count: usize, s: &Strings, k: &Kit
     if open_pull_request_count == 0 {
         return Button::new(s.pull_requests)
             .variant(ButtonVariant::Outline)
+            .icon(&icons::GIT_PULL_REQUEST)
             .on_press(|app: &mut Dialectic| app.show_pull_request_list())
             .build(k)
             .key("show-pull-requests-button");
@@ -510,6 +510,7 @@ pub fn pull_requests_button(open_pull_request_count: usize, s: &Strings, k: &Kit
         .fill(open_green)
         .hover(rune::color::hex("#1a7f37").unwrap_or(open_green))
         .on_press(|app: &mut Dialectic| app.show_pull_request_list())
+        .child(icon(&icons::GIT_PULL_REQUEST, 16.0).color(k.c.white))
         .child(
             row()
                 .px(8.0)
@@ -675,6 +676,7 @@ const SCENES: &[Scene] = &[
     ("pull-request-conflicts", |app| show_scene_pull_request(app, pull_request_detail::OVERVIEW_TAB)),
     ("pull-request-conflicts-files", |app| show_scene_pull_request(app, pull_request_detail::FILES_CHANGED_TAB)),
     ("changes", Dialectic::show_changes),
+    ("settings", Dialectic::show_settings),
     ("pull-request-rebase", |app| {
         show_scene_pull_request(app, pull_request_detail::OVERVIEW_TAB);
         app.merge_method = MergeMethod::Rebase;

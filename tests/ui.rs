@@ -116,8 +116,12 @@ fn open_review_and_merge_a_pull_request_then_hit_a_conflict() {
     press(&mut runtime, "back-to-repositories");
     assert_eq!(runtime.state.screen, Screen::Welcome);
 
+    assert!(runtime.find("language-picker").is_none(), "the language is set in Settings");
+    press(&mut runtime, "settings-button");
+    assert_eq!(runtime.state.screen, Screen::Settings);
+    assert!(runtime.find("language-picker").is_some() && runtime.find("source-code-link").is_some());
     runtime.update(|app, _| app.set_language(Language::Spanish));
-    settle(&mut runtime);
-    assert!(runtime.find("language-picker").is_some());
+    press(&mut runtime, "back-to-repositories");
+    assert_eq!(runtime.state.screen, Screen::Welcome);
     assert_eq!(Dialectic::without_repository().language, Language::Spanish, "the language is remembered");
 }

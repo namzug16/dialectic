@@ -1,14 +1,15 @@
 //! Xcode-style welcome: the app and "Open Repository…" on the left, saved projects on the right.
 
-use super::{Dialectic, Strings, error_banner, language_picker};
+use super::{Dialectic, Strings, error_banner, icons};
 use crate::db::SavedProject;
 use rune::{El, FileDialogOptions, Tx, col, row, text};
-use rune_kit::{Button, ButtonVariant, Kit};
+use rune_kit::{Button, ButtonVariant, IconButton, IconButtonVariant, Kit};
 
 pub fn view(app: &Dialectic, k: &Kit) -> El {
     let s = app.strings();
     let open_repository_button = Button::new(s.open_repository)
         .variant(ButtonVariant::Contrast)
+        .icon(&icons::FOLDER_OPEN)
         .on_press_tx(|app: &mut Dialectic, tx: &mut Tx| {
             let options =
                 FileDialogOptions { title: app.strings().open_repository_dialog_title.into(), ..Default::default() };
@@ -36,7 +37,14 @@ pub fn view(app: &Dialectic, k: &Kit) -> El {
         .child(text(s.tagline).font(k.ty.ui).color(k.c.text_muted).wrap())
         .child(col().h(12.0))
         .child(open_repository_button)
-        .child(language_picker(app, k));
+        .child(
+            Button::new(s.settings)
+                .variant(ButtonVariant::Ghost)
+                .icon(&icons::SETTINGS)
+                .on_press(|app: &mut Dialectic| app.show_settings())
+                .build(k)
+                .key("settings-button"),
+        );
     if let Some(banner) = error_banner(app, k) {
         introduction = introduction.child(banner);
     }
@@ -81,8 +89,10 @@ fn saved_project_row(index: usize, saved_project: &SavedProject, s: &Strings, k:
     }
 
     let removed_path = repository_path.clone();
-    let remove_button = Button::new(s.remove)
-        .variant(ButtonVariant::GhostFaint)
+    let remove_button = IconButton::new(&icons::X)
+        .variant(IconButtonVariant::GhostMuted)
+        .label(s.remove)
+        .help(s.remove)
         .on_press(move |app: &mut Dialectic| {
             if let Some(project_store) = &app.project_store
                 && let Err(error) = project_store.remove(&removed_path)

@@ -15,10 +15,22 @@ fn run_git_accepting_exit_codes(
     arguments: &[&str],
     accepted_exit_codes: &[i32],
 ) -> Result<(i32, String)> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(working_dir)
-        .args(arguments)
+    run_git_command(working_dir, arguments, accepted_exit_codes, None)
+}
+
+/// `index_file` swaps in another index (`GIT_INDEX_FILE`) for this one command.
+fn run_git_command(
+    working_dir: &Path,
+    arguments: &[&str],
+    accepted_exit_codes: &[i32],
+    index_file: Option<&Path>,
+) -> Result<(i32, String)> {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(working_dir).args(arguments);
+    if let Some(index_file) = index_file {
+        command.env("GIT_INDEX_FILE", index_file);
+    }
+    let output = command
         .output()
         .map_err(|error| Error(format!("could not run git (is it installed and on PATH?): {error}")))?;
     match output.status.code() {
@@ -185,17 +197,24 @@ pub fn predicted_merge_conflicts(working_dir: &Path, target: &str, source: &str)
 
 /// Everything committing would record: tracked changes against HEAD, plus untracked files as new files.
 pub fn uncommitted_diff(working_dir: &Path) -> Result<String> {
-    let mut diff = run_git(working_dir, &["diff", "--no-color", "--no-ext-diff", "HEAD", "--"])?;
-    let untracked_files = run_git(working_dir, &["ls-files", "--others", "--exclude-standard", "-z"])?;
-    for untracked_file in untracked_files.split('\0').filter(|path| !path.is_empty()) {
-        let (_, file_diff) = run_git_accepting_exit_codes(
-            working_dir,
-            &["diff", "--no-color", "--no-ext-diff", "--no-index", "--", "/dev/null", untracked_file],
-            &[0, 1],
-        )?;
-        diff.push_str(&file_diff);
+    // Untracked files are marked intent-to-add in a scratch copy of the index, so one `git diff HEAD` shows
+    // them as new files without staging anything for real; a `git diff --no-index` per file took seconds.
+    let real_index = run_git(working_dir, &["rev-parse", "--path-format=absolute", "--git-path", "index"])?;
+    let scratch_index = std::env::temp_dir().join(format!("dialectic-index-{}", std::process::id()));
+    if let Err(error) = std::fs::copy(real_index.trim(), &scratch_index)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(Error(format!("could not copy the git index: {error}")));
     }
-    Ok(diff)
+    let diff = run_git_with_index(working_dir, &scratch_index, &["add", "--intent-to-add", "--", "."]).and_then(|_| {
+        run_git_with_index(working_dir, &scratch_index, &["diff", "--no-color", "--no-ext-diff", "HEAD", "--"])
+    });
+    let _ = std::fs::remove_file(&scratch_index);
+    diff
+}
+
+fn run_git_with_index(working_dir: &Path, index_file: &Path, arguments: &[&str]) -> Result<String> {
+    run_git_command(working_dir, arguments, &[0], Some(index_file)).map(|(_, stdout)| stdout)
 }
 
 /// Tracked and untracked changes: whether there is anything for `commit_all` to record.

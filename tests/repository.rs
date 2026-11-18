@@ -211,6 +211,8 @@ fn uncommitted_changes_can_be_viewed_committed_and_carried_to_a_new_branch() {
 
     let diff = repository.uncommitted_diff().unwrap();
     assert!(diff.contains("+edited") && diff.contains("+new file"), "untracked files are included: {diff}");
+    let status = common::git(temporary_dir.path(), &["status", "--porcelain"]);
+    assert!(status.contains("?? notes.txt"), "the real index is left alone: {status}");
 
     assert!(repository.switch_branch("feature").unwrap_err().0.contains("uncommitted"));
     assert!(repository.commit_all_changes("  ").unwrap_err().0.contains("message"));

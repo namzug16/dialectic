@@ -39,6 +39,9 @@ cargo run --release -- /path/to/repo   # the same without make
   switch branch (refused while there are uncommitted changes), or start a new branch that takes
   the changes along. On `main`/`master` it warns you to branch first; once everything is
   committed on a work branch it offers Open a pull request.
+- **English or Español**: a picker on the welcome screen and in the header switches every label
+  and remembers the choice. All labels live in `src/ui/strings.rs`; errors from git and the
+  database stay in English, as the CLI shares them.
 
 ### How merging works
 

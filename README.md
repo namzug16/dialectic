@@ -111,9 +111,11 @@ Rune's pinned revisions is unreachable with cargo's built-in fetcher. To update 
 `rev` everywhere in `Cargo.toml`, including `[patch.crates-io]`, and copy that table from Rune's
 root `Cargo.toml` at the new revision.
 
-## Windows (not yet built)
+## Windows
 
-The code avoids macOS-only paths, but Windows builds haven't been tried. What a Windows build needs:
+Dialectic is released for Windows only. Pushing a `v*` tag runs `.github/workflows/release.yml`
+on a Windows runner, which builds `dialectic.exe` and attaches it, zipped, to a GitHub release.
+Building it yourself on Windows needs:
 
 - the MSVC toolchain (Rune's README lists MSVC or MinGW binutils) and Rust 1.99.1
   (`rust-toolchain.toml` installs it);

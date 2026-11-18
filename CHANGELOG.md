@@ -23,7 +23,11 @@ First release, built for Windows.
 - Your changes screen: see uncommitted changes, commit them, switch branches or start a branch
   that takes them along; open pull requests are called out.
 - `dialectic pr` CLI commands with JSON output and a guide for agents.
-- Spanish translation and a language picker.
+- Spanish translation, with the language picker on a Settings screen that also shows the
+  version and a link to the source code.
+- Icons on buttons and file-type icons in the changed-file list.
+- A changed-file list that stays fast with thousands of files, and uncommitted changes that load
+  in one `git diff` however many files are new.
 
 [Unreleased]: https://github.com/namzug16/dialectic/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/namzug16/dialectic/releases/tag/v0.1.0

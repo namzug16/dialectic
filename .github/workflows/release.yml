@@ -26,17 +26,14 @@ jobs:
       - name: Package
         shell: pwsh
         run: |
+          # Named after the Cargo.toml version: github.ref_name can be a branch with a slash in it.
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
           New-Item -ItemType Directory dist | Out-Null
           # Terminals pick dialectic.com over dialectic.exe, so the console build serves the CLI.
           Copy-Item target/release/dialectic-console.exe target/release/dialectic.com
           Compress-Archive -Path target/release/dialectic.exe, target/release/dialectic.com, LICENSE, README.md, CHANGELOG.md `
-            -DestinationPath dist/dialectic-${{ github.ref_name }}-windows-x86_64.zip
-
-      - name: Build installer
-        shell: pwsh
-        run: |
+            -DestinationPath dist/dialectic-$version-windows-x86_64.zip
           choco install innosetup --no-progress -y
-          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" installer\dialectic.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

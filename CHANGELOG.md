@@ -6,6 +6,8 @@ All notable changes to Dialectic are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-18
+
 ### Changed
 
 - The Windows app no longer opens a console window. The release also ships `dialectic.com`, which
@@ -34,5 +36,6 @@ First release, built for Windows.
 - A changed-file list that stays fast with thousands of files, and uncommitted changes that load
   in one `git diff` however many files are new.
 
-[Unreleased]: https://github.com/namzug16/dialectic/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/namzug16/dialectic/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/namzug16/dialectic/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/namzug16/dialectic/releases/tag/v0.1.0
